@@ -1,0 +1,12 @@
+
+*.egg-info
+
+.vscode
+
+__pycache__
+
+*.pyd
+
+build/
+
+ignore/

@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61", "wheel", "pybind11>=2.10"]
+build-backend = "setuptools.build_meta"
+
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License", # 或者你的许可证
+    "Operating System :: Microsoft :: Windows", # 🚩 核心标记：告诉 PyPI 和 pip 这只是给 Windows 的
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: C++",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: System :: Hardware :: Hardware Drivers",
+]

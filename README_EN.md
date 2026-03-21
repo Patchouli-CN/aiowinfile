@@ -25,7 +25,7 @@ Real-world benchmarks show significant advantages over thread-pool alternatives:
 
 | Concurrency | aiowinfile (ops/s) | aiofiles (ops/s) | Speedup |
 |------------|-------------------|------------------|---------|
-| 10         | 688              | 1,166           | ~1.7x   |
+| 10         | 688              | 1,166           | ~0.59x   |
 | 50         | 2,972            | 1,320           | ~2.3x   |
 | 200        | 2,981            | 1,244           | ~2.4x   |
 

@@ -1,15 +1,15 @@
 [build-system]
-requires = ["setuptools>=61", "wheel", "pybind11>=2.10", "pybind11-global"]
+requires = ["setuptools>=61", "wheel", "pybind11>=2.10"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "aiowinfile"
-version = "0.2.0"
+version = "0.1.0"
 description = "Async Windows IOCP file API for Python"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
-    {name = "Patchouli-CN", email = "your.email@example.com"}
+    {name = "Patchouli-CN", email = "3072252442@qq.com"}
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -36,17 +36,3 @@ Repository = "https://github.com/Patchouli-CN/aiowinfile.git"
 [tool.setuptools]
 packages = ["aiowinfile"]
 package-dir = {"" = "."}
-
-[tool.setuptools.packages.find]
-include = ["aiowinfile*"]
-
-[tool.setuptools.ext-modules]
-"aiowinfile._aiowinfile" = {sources = [
-    "src/globals.cpp",
-    "src/pool.cpp",
-    "src/loop_handle.cpp",
-    "src/iocp.cpp",
-    "src/file_handle.cpp",
-    "src/handle_pool.cpp",
-    "src/bindings.cpp",
-]}

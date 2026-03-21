@@ -13,3 +13,5 @@ dist/
 ignore/
 
 commands.txt
+
+/benchmark_data

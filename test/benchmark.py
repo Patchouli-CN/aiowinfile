@@ -17,6 +17,8 @@ except ImportError:
 
 try:
     import aiowinfile
+    # 性能调优可以加这个，让测试结果更准确
+    # aiowinfile.set_handle_pool_limits(512, 16384)
 except ImportError:
     aiowinfile = None
 
@@ -29,7 +31,7 @@ except ImportError:
 class ServerBenchmark:
     """服务器级性能测试"""
     
-    def __init__(self, test_dir: Path, config: BenchmarkConfig = None):
+    def __init__(self, test_dir: Path, config: BenchmarkConfig | None = None):
         self.test_dir = test_dir
         self.config = config or DEFAULT_CONFIG
         

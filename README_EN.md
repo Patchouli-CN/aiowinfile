@@ -30,6 +30,7 @@ Real-world benchmarks show significant advantages over thread-pool alternatives:
 | 200        | 2,981            | 1,244           | ~2.4x   |
 
 *Results from benchmark suite on Windows 10, HDD storage. Higher concurrency shows even greater advantages.*
+> Note: At low concurrency (10), aiowinfile is slightly slower than aiofiles due to IOCP initialization overhead and kernel-mode transition costs. The advantage begins to show at 20+ concurrent operations, reaching a peak speedup of 2.4x at 200 concurrency.
 
 ## 🛠️ Installation
 

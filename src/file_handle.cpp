@@ -1,4 +1,5 @@
-﻿#include "file_handle.hpp"
+﻿#define NOMINMAX
+#include "file_handle.hpp"
 #include <algorithm>
 
 // cached event loop
@@ -256,7 +257,7 @@ void FileHandle::close_impl() {
         CancelIoEx(m_handle, NULL);
         int w = 1;
         for (int i=0; i<12 && m_pending.load(std::memory_order_acquire)>0; ++i) {
-            Sleep(w); w = std::min(w*2, 32);
+            Sleep(w); w = std::min(w*2, 32); 
         }
         LARGE_INTEGER zero{};
         SetFilePointerEx(m_handle, zero, nullptr, FILE_BEGIN);

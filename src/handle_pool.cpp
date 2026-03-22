@@ -1,6 +1,9 @@
 #include "handle_pool.hpp"
 #include <algorithm>
 #include <cctype>
+#include <pybind11/pybind11.h>
+
+namespace py = pybind11; 
 
 static std::shared_mutex                                           g_hpMtx;
 static std::unordered_map<PoolKey, std::vector<HANDLE>, PoolKeyHash> g_hpMap;
@@ -34,10 +37,10 @@ void handle_pool_release(const PoolKey &key, HANDLE h) {
 
 void set_handle_pool_limits(size_t max_per_key, size_t max_total) {
     if (max_per_key == 0 || max_total == 0) {
-        throw std::invalid_argument("handle pool limits must be > 0");
+        throw py::value_error("handle pool limits must be > 0");
     }
     if (max_per_key > (1ull << 31) || max_total > (1ull << 31)) {
-        throw std::invalid_argument("handle pool limits are too large");
+        throw py::value_error("handle pool limits are too large");
     }
     g_hpMaxPerKey.store(max_per_key, std::memory_order_relaxed);
     g_hpMaxTotal.store(max_total, std::memory_order_relaxed);

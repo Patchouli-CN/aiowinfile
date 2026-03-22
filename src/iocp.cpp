@@ -1,3 +1,4 @@
+#define NOMINMAX
 #include "iocp.hpp"
 #include "file_handle.hpp"
 #include "io_request.hpp"
@@ -9,17 +10,30 @@ std::atomic<bool>                g_ctrlcTriggered{false};
 std::vector<std::thread>         g_iocpWorkers;
 std::mutex                       g_openFilesMtx;
 std::unordered_set<FileHandle*>  g_openFiles;
+std::atomic<unsigned>            g_iocp_worker_count{0};
 
 // ════════════════════════════════════════════════════════════════════════════
 // §4  IOCP init / shutdown
 // ════════════════════════════════════════════════════════════════════════════
+
+void set_iocp_worker_count(unsigned count) {
+if (count == 0 || (count >= 1 && count <= 128)) {
+        g_iocp_worker_count.store(count);
+    } else {
+        throw py::value_error("worker count must be 0 (auto) or 1-128");
+    }
+}
 
 void init_iocp() {
     SYSTEM_INFO si{}; GetSystemInfo(&si);
     // 优化：允许更多工作线程以处理高并发
     // 原来：min(CPU核心数, 4)
     // 现在：min(CPU核心数 * 2, 16)，但至少1个
-    unsigned n = std::max(1u, std::min((unsigned)si.dwNumberOfProcessors * 2, 16u));
+    unsigned n = g_iocp_worker_count.load();
+    if (n == 0) {
+        // 自动模式：CPU*2，上限 16
+        n = std::max(1u, std::min((unsigned)si.dwNumberOfProcessors * 2, 16u));
+    }
     g_iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
     if (!g_iocp) throw std::runtime_error("Failed to create IOCP");
     g_iocpRunning.store(true, std::memory_order_release);

@@ -77,5 +77,8 @@ PYBIND11_MODULE(_aiowinfile, m) {
 
     m.def("get_handle_pool_limits", &get_handle_pool_limits,
         "Get current handle pool limits as (max_per_key, max_total)");
+
+    m.def("set_iocp_worker_count",&set_iocp_worker_count,
+        "set iocp worker count");
 }
 

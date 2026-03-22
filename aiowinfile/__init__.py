@@ -5,7 +5,11 @@ from pathlib import Path
 if sys.platform != "win32":
     raise OSError("aiowinfile only supports Windows (IOCP-based async I/O).")
 
-from ._aiowinfile import AsyncFile as _AsyncFile, set_handle_pool_limits as _set_handle_pool_limits, get_handle_pool_limits as _get_handle_pool_limits
+from ._aiowinfile import (
+    AsyncFile as _AsyncFile,
+    set_handle_pool_limits as _set_handle_pool_limits,
+    get_handle_pool_limits as _get_handle_pool_limits,
+)
 from ._aiowinfile import set_iocp_worker_count as _set_iocp_worker_count
 
 _DEFAULT_READLINE_BUF = 65536  # 64 KB – much faster than 4 KB for large files
@@ -22,13 +26,15 @@ def get_handle_pool_limits() -> tuple[int, int]:
     """获取当前句柄池容量限制 (max_per_key,max_total)。"""
     return _get_handle_pool_limits()
 
+
 def set_iocp_worker_count(count: int = 0) -> None:
     """设置 IOCP 工作线程数量。
-    
+
     Args:
         count: 0=自动（CPU核心数*2，上限16），1-128=固定数量
     """
     _set_iocp_worker_count(count)
+
 
 class AsyncFile:
     """Windows IOCP 异步文件对象。
@@ -38,8 +44,12 @@ class AsyncFile:
     """
 
     __slots__ = (
-        "_impl", "_path", "_is_text", "_encoding",
-        "_line_buffer", "_closed",
+        "_impl",
+        "_path",
+        "_is_text",
+        "_encoding",
+        "_line_buffer",
+        "_closed",
     )
 
     def __init__(
@@ -48,7 +58,7 @@ class AsyncFile:
         mode: str = "rb",
         encoding: str | None = None,
     ) -> None:
-        self._path   = str(path)
+        self._path = str(path)
         self._closed = False
 
         # ── 文本 / 二进制模式判断 ──────────────────────────────────────────
@@ -64,13 +74,13 @@ class AsyncFile:
         # ── 规范化传给 C++ 的模式（始终二进制）────────────────────────────
         clean = mode.replace("t", "")
         if "b" not in clean:
-            has_plus  = "+" in clean
+            has_plus = "+" in clean
             base_char = next((c for c in clean if c in "rwax"), None)
             if not base_char:
                 raise ValueError(f"Invalid mode: '{mode}'")
             clean = base_char + ("+" if has_plus else "") + "b"
 
-        self._impl        = _AsyncFile(self._path, clean)
+        self._impl = _AsyncFile(self._path, clean)
         self._line_buffer = b""
 
     # ── context manager ───────────────────────────────────────────────────────
@@ -98,7 +108,7 @@ class AsyncFile:
         data: bytes = await self._impl.read(size)
         if not data:
             return "" if self._is_text else b""
-        return data.decode(self._encoding) if self._is_text else data # type: ignore
+        return data.decode(self._encoding) if self._is_text else data  # type: ignore
 
     async def readline(self) -> str | bytes:
         if self._closed:
@@ -111,13 +121,13 @@ class AsyncFile:
                     self._line_buffer[: idx + 1],
                     self._line_buffer[idx + 1 :],
                 )
-                return line.decode(self._encoding) if self._is_text else line # type: ignore
+                return line.decode(self._encoding) if self._is_text else line  # type: ignore
 
             chunk: bytes = await self._impl.read(_DEFAULT_READLINE_BUF)
             if not chunk:
                 if self._line_buffer:
                     out, self._line_buffer = self._line_buffer, b""
-                    return out.decode(self._encoding) if self._is_text else out # type: ignore
+                    return out.decode(self._encoding) if self._is_text else out  # type: ignore
                 return "" if self._is_text else b""
             self._line_buffer += chunk
 
@@ -143,7 +153,7 @@ class AsyncFile:
         if self._is_text:
             if not isinstance(data, str):
                 raise TypeError("Text mode requires str input.")
-            raw: bytes = data.encode(self._encoding) # type: ignore
+            raw: bytes = data.encode(self._encoding)  # type: ignore
         else:
             if isinstance(data, str):
                 raise TypeError("Binary mode requires bytes-like input, not str.")

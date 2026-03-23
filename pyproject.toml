@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ayafileio"
-version = "0.1.1"
-description = "Cross-platform async file API for Python"
+version = "0.1.2"
+description = "Cross-platform async file API for Python. Blazing fast like Shameimaru Aya."
 readme = "README.md"
 license = {text = "MIT"}
 authors = [

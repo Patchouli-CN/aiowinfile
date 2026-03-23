@@ -2,20 +2,24 @@
 #include "globals.hpp"
 #include "pool.hpp"
 #include "loop_handle.hpp"
+#ifdef _WIN32
 #include <windows.h>
+#endif
 #include <cstdint>
 
 // ════════════════════════════════════════════════════════════════════════════
 // §5  IORequest
 // ════════════════════════════════════════════════════════════════════════════
 
-class FileHandle;
+class IOBackendBase;
 
 enum class ReqType : uint8_t { Read, Write, Other };
 
 struct IORequest {
+#ifdef _WIN32
     OVERLAPPED   ov{};
-    FileHandle  *file          = nullptr;
+#endif
+    IOBackendBase  *file          = nullptr;
     LoopHandle  *loop_handle   = nullptr;
     PyObject    *future        = nullptr;  // owned
     PyObject    *set_result    = nullptr;  // owned, stolen at completion

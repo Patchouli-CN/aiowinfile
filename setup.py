@@ -4,21 +4,23 @@ import pybind11
 import sys
 from pathlib import Path
 
-# 自动扫描所有 .cpp 文件
+# Auto-scan all .cpp files recursively under src/
 src_dir = Path('src')
-sources = [str(p) for p in src_dir.glob('*.cpp')]
+sources = [str(p) for p in src_dir.rglob('*.cpp') 
+       if not ((sys.platform != 'win32' and 'windows' in p.name) or 
+           (sys.platform == 'win32' and 'linux' in p.name))]
 
 setup(
-    name='aiowinfile',
+    name='ayafileio',
     version='0.1.1',
-    description='Async Windows IOCP file API for Python',
+    description='Cross-platform async file API for Python',
     author='Patchouli-CN',
     author_email='3072252442@qq.com',
     license='MIT',
-    packages=['aiowinfile'],
+    packages=['ayafileio'],
     ext_modules=[
         Extension(
-            'aiowinfile._aiowinfile',
+            'ayafileio._ayafileio',
             sources=sources,
             include_dirs=[
                 pybind11.get_include(),
@@ -31,7 +33,7 @@ setup(
     # 重要：包含包数据
     include_package_data=True,
     package_data={
-        'aiowinfile': ['*.pyd', '*.pyi'],  # 包含编译好的扩展和类型提示
+        'ayafileio': ['*.pyd', '*.pyi'],  # 包含编译好的扩展和类型提示
     },
     # 排除不需要的文件
     exclude_package_data={

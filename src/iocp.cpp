@@ -1,6 +1,6 @@
 #define NOMINMAX
 #include "iocp.hpp"
-#include "file_handle.hpp"
+#include "io_backend.hpp"
 #include "io_request.hpp"
 #include <algorithm>
 
@@ -9,7 +9,7 @@ std::atomic<bool>                g_iocpRunning{false};
 std::atomic<bool>                g_ctrlcTriggered{false};
 std::vector<std::thread>         g_iocpWorkers;
 std::mutex                       g_openFilesMtx;
-std::unordered_set<FileHandle*>  g_openFiles;
+std::unordered_set<IOBackendBase*>  g_openFiles;
 std::atomic<unsigned>            g_iocp_worker_count{0};
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -79,7 +79,7 @@ void iocp_thread_proc() {
 }
 
 void close_all_files() {
-    std::vector<FileHandle*> snap;
+    std::vector<IOBackendBase*> snap;
     { std::lock_guard<std::mutex> lk(g_openFilesMtx); snap.assign(g_openFiles.begin(), g_openFiles.end()); }
     for (auto *f : snap) try { f->close_impl(); } catch (...) {}
 }

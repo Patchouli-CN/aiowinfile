@@ -1,5 +1,5 @@
 
-# aiowinfile
+# ayafileio
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python Version](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
@@ -7,35 +7,35 @@
 
 **True asynchronous file I/O for Python on Windows using IOCP (I/O Completion Ports).**
 
-Unlike traditional thread-pool based approaches, `aiowinfile` leverages Windows' native IOCP to deliver kernel-level asynchronous file operations with zero thread overhead.
+Unlike traditional thread-pool based approaches, `ayafileio` leverages Windows' native IOCP to deliver kernel-level asynchronous file operations with zero thread overhead.
 
 ## 🚀 Key Features
 
-- ✅ **Zero Thread Overhead**: No `run_in_executor`, no background threads
+- ✅ **Zero Thread Overhead**: No `run_in_executor`, no background threads (on windows)
 - ✅ **Kernel-Level Completion**: No user-space scheduling delays
 - ✅ **High Concurrency**: Handles thousands of concurrent file operations effortlessly
 - ✅ **Standard API**: Familiar file-like interface with async/await
 - ✅ **Text & Binary Support**: Automatic encoding/decoding for text modes
-- ✅ **Configurable Handle Pool**: Tune performance for your workload
-- ✅ **Windows Native**: Optimized for Windows IOCP architecture
+- ✅ **Configurable Handle Pool**: Tune performance for your workload (on windows)
+- ✅ **Cross Platform**: Optimized for Windows IOCP architecture, but use thread-pool on another platform
 
 ## 📊 Performance
 
 Real-world benchmarks show significant advantages over thread-pool alternatives:
 
-| Concurrency | aiowinfile (ops/s) | aiofiles (ops/s) | Speedup |
+| Concurrency | ayafileio (ops/s) | aiofiles (ops/s) | Speedup |
 |------------|-------------------|------------------|---------|
 | 10         | 688              | 1,166           | ~0.59x   |
 | 50         | 2,972            | 1,320           | ~2.3x   |
 | 200        | 2,981            | 1,244           | ~2.4x   |
 
 *Results from benchmark suite on Windows 10, HDD storage. Higher concurrency shows even greater advantages.*
-> Note: At low concurrency (10), aiowinfile is slightly slower than aiofiles due to IOCP initialization overhead and kernel-mode transition costs. The advantage begins to show at 20+ concurrent operations, reaching a peak speedup of 2.4x at 200 concurrency.
+> Note: At low concurrency (10), ayafileio is slightly slower than aiofiles due to IOCP initialization overhead and kernel-mode transition costs. The advantage begins to show at 20+ concurrent operations, reaching a peak speedup of 2.4x at 200 concurrency.
 
 ## 🛠️ Installation
 
 ```bash
-pip install aiowinfile
+pip install ayafileio
 ```
 
 **Requirements:**
@@ -47,21 +47,21 @@ pip install aiowinfile
 
 ```python
 import asyncio
-import aiowinfile
+import ayafileio
 
 async def main():
     # Basic async file operations
-    async with aiowinfile.open("example.txt", "w") as f:
+    async with ayafileio.open("example.txt", "w") as f:
         await f.write("Hello, async world!\n")
         await f.flush()
 
     # Read with automatic text decoding
-    async with aiowinfile.open("example.txt", "r", encoding="utf-8") as f:
+    async with ayafileio.open("example.txt", "r", encoding="utf-8") as f:
         content = await f.read()
         print(content)  # "Hello, async world!\n"
 
     # Binary operations
-    async with aiowinfile.open("data.bin", "rb") as f:
+    async with ayafileio.open("data.bin", "rb") as f:
         data = await f.read(1024)
         await f.seek(0, 0)  # Seek to beginning
 
@@ -75,14 +75,14 @@ asyncio.run(main())
 For high-concurrency workloads, adjust the handle pool size:
 
 ```python
-import aiowinfile
+import ayafileio
 
 # Check current limits
-max_per_key, max_total = aiowinfile.get_handle_pool_limits()
+max_per_key, max_total = ayafileio.get_handle_pool_limits()
 print(f"Current: {max_per_key} per key, {max_total} total")
 
 # Increase for better performance with many files
-aiowinfile.set_handle_pool_limits(128, 4096)
+ayafileio.set_handle_pool_limits(128, 4096)
 ```
 
 This reuses file handles across open/close cycles, reducing expensive `CreateFile` calls.
@@ -124,12 +124,12 @@ def get_handle_pool_limits() -> tuple[int, int]: ...
 Clone the repository and run the benchmark suite:
 
 ```bash
-git clone https://github.com/your-repo/aiowinfile.git
-cd aiowinfile
+git clone https://github.com/your-repo/ayafileio.git
+cd ayafileio
 python run_benchmark.py
 ```
 
-This compares `aiowinfile` against `aiofiles` across various concurrency levels.
+This compares `ayafileio` against `aiofiles` across various concurrency levels.
 
 ## 🤝 Contributing
 
@@ -147,8 +147,6 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## ⚠️ Limitations
 
-- **Windows Only**: Uses Windows-specific IOCP APIs
-- **No Linux/macOS Support**: Platform-specific implementation
 - **Python 3.10+**: Requires modern Python features
 
 ## 🙏 Acknowledgments

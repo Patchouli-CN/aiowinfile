@@ -1,0 +1,306 @@
+#include "linux_io_backend.hpp"
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <errno.h>
+#include <algorithm>
+#include <pthread.h>
+
+// cached event loop
+static PyObject   *g_cachedLoop       = nullptr;
+static PyObject   *g_cachedFutureFn   = nullptr;
+static LoopHandle *g_cachedLoopHandle = nullptr;
+
+static void refresh_loop_cache(PyObject *loop) {
+    if (loop == g_cachedLoop) return;
+    Py_XDECREF(g_cachedFutureFn);
+    g_cachedLoop       = loop;
+    g_cachedFutureFn   = PyObject_GetAttr(loop, g_str_create_future);
+    g_cachedLoopHandle = get_or_create_loop_handle(loop);
+}
+
+LinuxIOBackend::LinuxIOBackend(const std::string &path, const std::string &mode) {
+    PyObject *loop = PyObject_CallNoArgs(g_get_running_loop);
+    if (!loop) throw py::error_already_set();
+    refresh_loop_cache(loop);
+    m_loop          = loop;
+    m_create_future = g_cachedFutureFn; Py_INCREF(m_create_future);
+    m_loop_handle   = g_cachedLoopHandle;
+
+    int flags = O_RDONLY;
+    bool canRead=false, canWrite=false, appendMode=false;
+    bool plus=mode.find('+')!=std::string::npos;
+    bool hasR=mode.find('r')!=std::string::npos, hasW=mode.find('w')!=std::string::npos;
+    bool hasA=mode.find('a')!=std::string::npos, hasX=mode.find('x')!=std::string::npos;
+
+    if (hasX&&hasW) throw py::value_error("Invalid mode: cannot combine x and w");
+    if (!hasR&&!hasW&&!hasA&&!hasX) throw py::value_error("Invalid mode: missing mode character");
+    if (hasR) { canRead=true; }
+    if (hasW) { canWrite=true; flags = O_WRONLY | O_CREAT | O_TRUNC; }
+    if (hasA) { canWrite=true; appendMode=true; flags = O_WRONLY | O_CREAT | O_APPEND; }
+    if (hasX) { canWrite=true; flags = O_WRONLY | O_CREAT | O_EXCL; }
+    if (plus) { flags = O_RDWR; canRead=true; canWrite=true; }
+
+    m_appendMode = appendMode;
+
+    m_fd = open(path.c_str(), flags, 0644);
+    if (m_fd == -1) {
+        throw py::error_already_set();
+    }
+
+    m_running.store(true, std::memory_order_release);
+    m_pending.store(0, std::memory_order_relaxed);
+    m_filePos = 0;
+    if (m_appendMode) {
+        struct stat st;
+        if (fstat(m_fd, &st) == 0) {
+            m_filePos = st.st_size;
+        }
+    }
+
+    // Start worker threads
+    unsigned num_workers = 4; // or get from config
+    for (unsigned i = 0; i < num_workers; ++i) {
+        m_workers.emplace_back(&LinuxIOBackend::worker_thread, this);
+    }
+}
+
+LinuxIOBackend::~LinuxIOBackend() {
+    close_impl();
+    Py_XDECREF(m_create_future);
+    Py_XDECREF(m_loop);
+}
+
+void LinuxIOBackend::worker_thread() {
+    while (true) {
+        std::function<void()> task;
+        {
+            std::unique_lock<std::mutex> lk(m_queueMtx);
+            m_cv.wait(lk, [this] { return m_stop || !m_taskQueue.empty(); });
+            if (m_stop && m_taskQueue.empty()) return;
+            task = std::move(m_taskQueue.front());
+            m_taskQueue.pop();
+        }
+        task();
+    }
+}
+
+void LinuxIOBackend::enqueue_task(std::function<void()> task) {
+    {
+        std::lock_guard<std::mutex> lk(m_queueMtx);
+        m_taskQueue.push(std::move(task));
+    }
+    m_cv.notify_one();
+}
+
+PyObject *LinuxIOBackend::read(int64_t size) {
+    PyObject *future = PyObject_CallNoArgs(m_create_future);
+    if (!future) return nullptr;
+
+    if (!m_running.load(std::memory_order_relaxed)) {
+        resolve_exc(future, g_KeyboardInterrupt, 0, "interrupted");
+        return future;
+    }
+
+    uint64_t offset; size_t readSize;
+    {
+        std::lock_guard<std::mutex> lk(m_posMtx);
+        struct stat st;
+        if (fstat(m_fd, &st) != 0) {
+            resolve_exc(future, g_OSError, errno, "fstat failed");
+            return future;
+        }
+        int64_t rem = (int64_t)st.st_size - (int64_t)m_filePos;
+        if (rem <= 0) { resolve_bytes(future, nullptr, 0); return future; }
+        readSize = (size<0||size>rem) ? (size_t)rem : (size_t)size;
+        if (readSize == 0) { resolve_bytes(future, nullptr, 0); return future; }
+        offset = m_filePos;
+        m_filePos += readSize;
+    }
+
+    IORequest *req = make_req(readSize, future, ReqType::Read);
+
+    m_pending.fetch_add(1, std::memory_order_relaxed);
+    enqueue_task([this, req, offset, readSize]() {
+        ssize_t got = pread(m_fd, req->buf(), readSize, offset);
+        if (got >= 0) {
+            complete_ok(req, got);
+        } else {
+            complete_error(req, errno);
+        }
+    });
+
+    return future;
+}
+
+PyObject *LinuxIOBackend::write(Py_buffer *view) {
+    size_t size = (size_t)view->len;
+    PyObject *future = PyObject_CallNoArgs(m_create_future);
+    if (!future) return nullptr;
+
+    if (!m_running.load(std::memory_order_relaxed)) {
+        resolve_exc(future, g_KeyboardInterrupt, 0, "interrupted");
+        return future;
+    }
+    if (size == 0) {
+        PyObject *z = PyLong_FromLong(0);
+        resolve_ok(future, z); Py_DECREF(z);
+        return future;
+    }
+
+    uint64_t offset;
+    {
+        std::lock_guard<std::mutex> lk(m_posMtx);
+        if (m_appendMode) {
+            struct stat st;
+            if (fstat(m_fd, &st) != 0) {
+                resolve_exc(future, g_OSError, errno, "fstat failed");
+                return future;
+            }
+            offset = st.st_size;
+        } else {
+            offset = m_filePos;
+        }
+        m_filePos = offset + size;
+    }
+
+    IORequest *req = make_req(size, future, ReqType::Write);
+    memcpy(req->buf(), view->buf, size);
+
+    m_pending.fetch_add(1, std::memory_order_relaxed);
+    enqueue_task([this, req, offset, size]() {
+        ssize_t wrote = pwrite(m_fd, req->buf(), size, offset);
+        if (wrote >= 0) {
+            complete_ok(req, wrote);
+        } else {
+            complete_error(req, errno);
+        }
+    });
+
+    return future;
+}
+
+PyObject *LinuxIOBackend::seek(int64_t offset, int whence) {
+    PyObject *future = PyObject_CallNoArgs(m_create_future);
+    if (!future) return nullptr;
+    {
+        std::lock_guard<std::mutex> lk(m_posMtx);
+        if (whence == 0) m_filePos = (uint64_t)offset;
+        else if (whence == 1) m_filePos = (uint64_t)((int64_t)m_filePos + offset);
+        else if (whence == 2) {
+            struct stat st;
+            if (fstat(m_fd, &st) != 0) {
+                resolve_exc(future, g_OSError, errno, "fstat failed");
+                return future;
+            }
+            m_filePos = (uint64_t)((int64_t)st.st_size + offset);
+        } else {
+            resolve_exc(future, g_ValueError, 0, "Invalid whence value");
+            return future;
+        }
+    }
+    PyObject *pos = PyLong_FromUnsignedLongLong(m_filePos);
+    resolve_ok(future, pos); Py_DECREF(pos);
+    return future;
+}
+
+PyObject *LinuxIOBackend::flush() {
+    PyObject *future = PyObject_CallNoArgs(m_create_future);
+    if (!future) return nullptr;
+    if (!m_running.load(std::memory_order_relaxed) || m_fd == -1) {
+        resolve_exc(future, g_OSError, 0, "flush on closed file");
+        return future;
+    }
+    if (fsync(m_fd) != 0) {
+        resolve_exc(future, g_OSError, errno, "fsync failed");
+        return future;
+    }
+    resolve_ok(future, Py_None);
+    return future;
+}
+
+PyObject *LinuxIOBackend::close() {
+    PyObject *future = PyObject_CallNoArgs(m_create_future);
+    if (!future) return nullptr;
+    close_impl();
+    resolve_ok(future, Py_None);
+    return future;
+}
+
+void LinuxIOBackend::close_impl() {
+    bool expected = true;
+    if (!m_running.compare_exchange_strong(expected, false)) return;
+    {
+        std::lock_guard<std::mutex> lk(m_queueMtx);
+        m_stop = true;
+    }
+    m_cv.notify_all();
+    for (auto& t : m_workers) {
+        if (t.joinable()) t.join();
+    }
+    if (m_fd != -1) {
+        close();
+        m_fd = -1;
+    }
+}
+
+void LinuxIOBackend::complete_ok(IORequest *req, size_t bytes) {
+    m_pending.fetch_sub(1, std::memory_order_release);
+    PyGILState_STATE gs = PyGILState_Ensure();
+
+    PyObject *val = nullptr;
+    if      (req->type == ReqType::Read)  val = PyBytes_FromStringAndSize(req->buf(), bytes);
+    else if (req->type == ReqType::Write) val = PyLong_FromSsize_t((Py_ssize_t)bytes);
+    else                                  { val = Py_None; Py_INCREF(Py_None); }
+
+    PyObject *set_fn = req->set_result; req->set_result = nullptr;
+    Py_DECREF(req->future); req->future = nullptr;
+    Py_XDECREF(req->set_exception); req->set_exception = nullptr;
+
+    req->loop_handle->push(set_fn, val);
+    delete req;
+
+    PyGILState_Release(gs);
+}
+
+void LinuxIOBackend::complete_error(IORequest *req, DWORD err) {
+    m_pending.fetch_sub(1, std::memory_order_release);
+    PyGILState_STATE gs = PyGILState_Ensure();
+
+    PyObject *exc_class = g_OSError; // map error
+    PyObject *exc = PyObject_CallFunction(exc_class, "is", (int)err, "I/O operation failed");
+
+    PyObject *set_fn = req->set_exception; req->set_exception = nullptr;
+    Py_DECREF(req->future); req->future = nullptr;
+    Py_XDECREF(req->set_result); req->set_result = nullptr;
+
+    req->loop_handle->push(set_fn, exc);
+    delete req;
+
+    PyGILState_Release(gs);
+}
+
+IORequest *LinuxIOBackend::make_req(size_t size, PyObject *future, ReqType type) {
+    auto *req          = new IORequest();
+    req->file          = this;
+    req->loop_handle   = m_loop_handle;
+    req->future        = future; Py_INCREF(future);
+    req->set_result    = PyObject_GetAttr(future, g_str_set_result);
+    req->set_exception = PyObject_GetAttr(future, g_str_set_exception);
+    req->reqSize       = size;
+    req->type          = type;
+    if (size <= POOL_BUF_SIZE) req->poolBuf = pool_acquire();
+    else                       req->heapBuf = new char[size];
+    return req;
+}
+
+void LinuxIOBackend::complete_error_inline(IORequest *req, DWORD err) {
+    m_pending.fetch_sub(1, std::memory_order_relaxed);
+    PyObject *exc_class = g_OSError;
+    PyObject *exc = PyObject_CallFunction(exc_class, "is", (int)err, "I/O operation failed");
+    PyObject *set_fn = req->set_exception; req->set_exception = nullptr;
+    PyObject *r = PyObject_CallOneArg(set_fn, exc);
+    Py_XDECREF(r); Py_DECREF(set_fn); Py_DECREF(exc);
+    delete req;
+}

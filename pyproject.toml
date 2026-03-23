@@ -3,9 +3,9 @@ requires = ["setuptools>=61", "wheel", "pybind11>=2.10"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "aiowinfile"
+name = "ayafileio"
 version = "0.1.1"
-description = "Async Windows IOCP file API for Python"
+description = "Cross-platform async file API for Python"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
@@ -15,7 +15,7 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
-    "Operating System :: Microsoft :: Windows",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -30,9 +30,9 @@ requires-python = ">=3.10"
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/Patchouli-CN/aiowinfile"
-Repository = "https://github.com/Patchouli-CN/aiowinfile.git"
+Homepage = "https://github.com/Patchouli-CN/ayafileio"
+Repository = "https://github.com/Patchouli-CN/ayafileio.git"
 
 [tool.setuptools]
-packages = ["aiowinfile"]
+packages = ["ayafileio"]
 package-dir = {"" = "."}

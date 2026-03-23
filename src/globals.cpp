@@ -31,6 +31,7 @@ void cache_globals() {
     g_str_call_soon_ts  = PyUnicode_InternFromString("call_soon_threadsafe");
 }
 
+#ifdef _WIN32
 [[noreturn]] void throw_os_error(DWORD err, const char *msg, const char *filename) {
     PyObject *cls = map_win_error(err);
     PyObject *exc = filename
@@ -40,3 +41,4 @@ void cache_globals() {
     Py_DECREF(exc);
     throw py::error_already_set();
 }
+#endif

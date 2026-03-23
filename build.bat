@@ -3,7 +3,7 @@ chcp 65001 > nul
 setlocal enabledelayedexpansion
 
 echo ========================================
-echo   aiowinfile 打包脚本
+echo   ayafileio 打包脚本
 echo ========================================
 echo.
 
@@ -43,13 +43,13 @@ if exist dist (
     echo 删除 dist 目录...
     rmdir /s /q dist
 )
-if exist aiowinfile.egg-info (
-    echo 删除 aiowinfile.egg-info...
-    rmdir /s /q aiowinfile.egg-info
+if exist ayafileio.egg-info (
+    echo 删除 ayafileio.egg-info...
+    rmdir /s /q ayafileio.egg-info
 )
-if exist aiowinfile\_aiowinfile*.pyd (
+if exist ayafileio\ayafileio*.pyd (
     echo 删除旧的 .pyd 文件...
-    del /q aiowinfile\_aiowinfile*.pyd 2>nul
+    del /q ayafileio\ayafileio*.pyd 2>nul
 )
 echo ✅ 清理完成
 echo.
@@ -94,7 +94,7 @@ echo 上传到 PyPI:
 echo   twine upload dist\*.whl
 echo.
 echo 测试安装:
-echo   pip install dist\aiowinfile-*.whl
+echo   pip install dist\ayafileio-*.whl
 echo.
 
 pause

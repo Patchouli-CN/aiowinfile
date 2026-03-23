@@ -1,3 +1,4 @@
+#ifdef _WIN32
 #pragma once
 #include <windows.h>
 #include <atomic>
@@ -10,14 +11,14 @@
 // §4  IOCP globals
 // ════════════════════════════════════════════════════════════════════════════
 
-class FileHandle;
+class IOBackendBase;
 
 extern HANDLE                           g_iocp;
 extern std::atomic<bool>                g_iocpRunning;
 extern std::atomic<bool>                g_ctrlcTriggered;
 extern std::vector<std::thread>         g_iocpWorkers;
 extern std::mutex                       g_openFilesMtx;
-extern std::unordered_set<FileHandle*>  g_openFiles;
+extern std::unordered_set<IOBackendBase*>  g_openFiles;
 extern std::atomic<unsigned>            g_iocp_worker_count;
 
 void init_iocp();
@@ -27,3 +28,4 @@ void iocp_thread_proc();
 void close_all_files();
 
 BOOL WINAPI ctrl_handler(DWORD t);
+#endif

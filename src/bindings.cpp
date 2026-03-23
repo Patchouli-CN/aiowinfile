@@ -1,20 +1,20 @@
 /*
- * bindings.cpp  –  pybind11 module entry point
+ * bindings.cpp - pybind11 module entry point
  */
 #include "globals.hpp"
+#ifdef _WIN32
 #include "iocp.hpp"
+#endif
 #include "file_handle.hpp"
 #include "handle_pool.hpp"
 
-// ════════════════════════════════════════════════════════════════════════════
-// §8  pybind11 bindings
-// ════════════════════════════════════════════════════════════════════════════
+// pybind11 bindings
 
-struct PyAsyncIOCPFile {
+struct PyAsyncFile {
     FileHandle *fh;
-    explicit PyAsyncIOCPFile(const std::string &path, const std::string &mode)
+    explicit PyAsyncFile(const std::string &path, const std::string &mode)
         : fh(new FileHandle(path, mode)) {}
-    ~PyAsyncIOCPFile() { delete fh; }
+    ~PyAsyncFile() { delete fh; }
 
     py::object read(int64_t size = -1) {
         PyObject *r = fh->read(size);
@@ -48,28 +48,32 @@ struct PyAsyncIOCPFile {
     void close_impl() { fh->close_impl(); }
 };
 
-PYBIND11_MODULE(_aiowinfile, m) {
-    m.doc() = "Async IOCP file operations for Windows";
+PYBIND11_MODULE(_ayafileio, m) {
+    m.doc() = "Cross-platform async file I/O module";
 
     cache_globals();
+#ifdef _WIN32
     init_iocp();
+#endif
 
     auto atexit = py::module_::import("atexit");
     atexit.attr("register")(py::cpp_function([]() {
+#ifdef _WIN32
         close_all_files();
         handle_pool_drain();
         shutdown_iocp();
+#endif
     }));
 
-    py::class_<PyAsyncIOCPFile>(m, "AsyncFile")
+    py::class_<PyAsyncFile>(m, "AsyncFile")
         .def(py::init<const std::string &, const std::string &>(),
              py::arg("path"), py::arg("mode") = "rb")
-        .def("read",  &PyAsyncIOCPFile::read,  py::arg("size") = -1)
-        .def("write", &PyAsyncIOCPFile::write)
-        .def("seek",  &PyAsyncIOCPFile::seek,  py::arg("offset"), py::arg("whence") = 0)
-        .def("flush", &PyAsyncIOCPFile::flush)
-        .def("close", &PyAsyncIOCPFile::close)
-        .def("close_impl", &PyAsyncIOCPFile::close_impl);
+        .def("read",  &PyAsyncFile::read,  py::arg("size") = -1)
+        .def("write", &PyAsyncFile::write)
+        .def("seek",  &PyAsyncFile::seek,  py::arg("offset"), py::arg("whence") = 0)
+        .def("flush", &PyAsyncFile::flush)
+        .def("close", &PyAsyncFile::close)
+        .def("close_impl", &PyAsyncFile::close_impl);
 
     m.def("set_handle_pool_limits", &set_handle_pool_limits,
         "Set handle pool max_per_key and max_total",
@@ -78,7 +82,9 @@ PYBIND11_MODULE(_aiowinfile, m) {
     m.def("get_handle_pool_limits", &get_handle_pool_limits,
         "Get current handle pool limits as (max_per_key, max_total)");
 
+#ifdef _WIN32
     m.def("set_iocp_worker_count",&set_iocp_worker_count,
         "set iocp worker count");
+#endif
 }
 

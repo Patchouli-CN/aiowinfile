@@ -1,67 +1,67 @@
 
-# aiowinfile
+# ayafileio
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python Version](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
-[![Platform](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
+[![Platform](https://img.shields.io/badge/platform-Cross--platform-blue.svg)](https://en.wikipedia.org/wiki/Cross-platform)
 
-**Windows 平台真正的异步文件 I/O 库，使用 IOCP（I/O 完成端口）。**
+**跨平台异步文件 I/O 库，使用原生异步 I/O 机制。**
 
-与传统的线程池方案不同，`aiowinfile` 利用 Windows 原生 IOCP 实现内核级异步文件操作，零线程开销。
+在 Windows 上使用 IOCP（I/O 完成端口），在 Linux 上使用线程池模拟异步 I/O，实现真正的异步文件操作。
 
 ## 🚀 核心特性
 
-- ✅ **零线程开销**：无需 `run_in_executor`，无后台线程
-- ✅ **内核级完成**：无用户态调度延迟
+- ✅ **零线程开销**：无需 `run_in_executor`，无后台线程 (Windows)
+- ✅ **内核级完成**：无用户态调度延迟 (Windows)
 - ✅ **高并发友好**：轻松处理数千并发文件操作
 - ✅ **标准 API**：熟悉的文件式接口，支持 async/await
 - ✅ **文本二进制支持**：文本模式自动编解码
-- ✅ **可配置句柄池**：根据工作负载调整性能
-- ✅ **Windows 原生**：针对 Windows IOCP 架构优化
+- ✅ **可配置句柄池**：根据工作负载调整性能 (Windows)
+- ✅ **跨平台**：Windows 和 Linux 支持
 
 ## 📊 性能表现
 
 实际基准测试显示，相较于线程池方案有显著优势：
 
-| 并发数 | aiowinfile (ops/s) | aiofiles (ops/s) | 加速比 |
+| 并发数 | ayafileio (ops/s) | aiofiles (ops/s) | 加速比 |
 |-------|-------------------|------------------|--------|
 | 10    | 688              | 1,166           | ~0.59x  |
 | 50    | 2,972            | 1,320           | ~2.3x  |
 | 200   | 2,981            | 1,244           | ~2.4x  |
 
 *Windows 10、HDD 存储上的基准测试结果。更高并发显示更大优势。*
-> 注：低并发（10）时aiowinfile略慢于aiofiles，这是由于IOCP初始化开销和内核态切换成本；在20及以上并发时优势开始显现，200并发时达到2.4x的峰值加速比。
+> 注：低并发（10）时ayafileio略慢于aiofiles，这是由于IOCP初始化开销和内核态切换成本；在20及以上并发时优势开始显现，200并发时达到2.4x的峰值加速比。
 
 ## 🛠️ 安装
 
 ```bash
-pip install aiowinfile
+pip install ayafileio
 ```
 
 **系统要求：**
 - Python 3.10+
-- Windows 7 / Server 2008 R2 或更高版本
+- Windows 7 / Server 2008 R2 或更高版本，或 Linux
 - 无其他依赖
 
 ## 🚀 快速开始
 
 ```python
 import asyncio
-import aiowinfile
+import ayafileio
 
 async def main():
     # 基础异步文件操作
-    async with aiowinfile.open("example.txt", "w") as f:
+    async with ayafileio.open("example.txt", "w") as f:
         await f.write("Hello, async world!\n")
         await f.flush()
 
     # 读取并自动文本解码
-    async with aiowinfile.open("example.txt", "r", encoding="utf-8") as f:
+    async with ayafileio.open("example.txt", "r", encoding="utf-8") as f:
         content = await f.read()
         print(content)  # "Hello, async world!\n"
 
     # 二进制操作
-    async with aiowinfile.open("data.bin", "rb") as f:
+    async with ayafileio.open("data.bin", "rb") as f:
         data = await f.read(1024)
         await f.seek(0, 0)  # 定位到开头
 
@@ -75,14 +75,14 @@ asyncio.run(main())
 对于高并发工作负载，调整句柄池大小：
 
 ```python
-import aiowinfile
+import ayafileio
 
 # 查看当前限制
-max_per_key, max_total = aiowinfile.get_handle_pool_limits()
+max_per_key, max_total = ayafileio.get_handle_pool_limits()
 print(f"当前: 每键 {max_per_key}，总计 {max_total}")
 
 # 增加以提升多文件性能
-aiowinfile.set_handle_pool_limits(128, 4096)
+ayafileio.set_handle_pool_limits(128, 4096)
 ```
 
 这会在打开/关闭周期中重用文件句柄，减少昂贵的 `CreateFile` 调用。
@@ -124,12 +124,12 @@ def get_handle_pool_limits() -> tuple[int, int]: ...
 克隆仓库并运行基准测试套件：
 
 ```bash
-git clone https://github.com/your-repo/aiowinfile.git
-cd aiowinfile
+git clone https://github.com/your-repo/ayafileio.git
+cd ayafileio
 python run_benchmark.py
 ```
 
-这会在不同并发级别比较 `aiowinfile` 与 `aiofiles`。
+这会在不同并发级别比较 `ayafileio` 与 `aiofiles`。
 
 ## 🤝 贡献
 
@@ -147,8 +147,6 @@ MIT 许可证 - 详见 [LICENSE](LICENSE)。
 
 ## ⚠️ 限制
 
-- **仅限 Windows**：使用 Windows 特定 IOCP API
-- **不支持 Linux/macOS**：平台特定实现
 - **Python 3.10+**：需要现代 Python 特性
 
 ## 🙏 致谢

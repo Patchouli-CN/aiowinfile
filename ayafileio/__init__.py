@@ -2,15 +2,13 @@ import sys
 import locale
 from pathlib import Path
 
-if sys.platform != "win32":
-    raise OSError("aiowinfile only supports Windows (IOCP-based async I/O).")
-
-from ._aiowinfile import (
+from ._ayafileio import (
     AsyncFile as _AsyncFile,
     set_handle_pool_limits as _set_handle_pool_limits,
     get_handle_pool_limits as _get_handle_pool_limits,
 )
-from ._aiowinfile import set_iocp_worker_count as _set_iocp_worker_count
+if sys.platform == "win32":
+    from ._ayafileio import set_iocp_worker_count as _set_iocp_worker_count
 
 _DEFAULT_READLINE_BUF = 65536  # 64 KB – much faster than 4 KB for large files
 
@@ -27,17 +25,18 @@ def get_handle_pool_limits() -> tuple[int, int]:
     return _get_handle_pool_limits()
 
 
-def set_iocp_worker_count(count: int = 0) -> None:
-    """设置 IOCP 工作线程数量。
+if sys.platform == "win32":
+    def set_iocp_worker_count(count: int = 0) -> None:
+        """设置 IOCP 工作线程数量。
 
-    Args:
-        count: 0=自动（CPU核心数*2，上限16），1-128=固定数量
-    """
-    _set_iocp_worker_count(count)
+        Args:
+            count: 0=自动（CPU核心数*2，上限16），1-128=固定数量
+        """
+        _set_iocp_worker_count(count)
 
 
 class AsyncFile:
-    """Windows IOCP 异步文件对象。
+    """跨平台异步文件对象。
 
     支持模式: r/rb/w/wb/a/ab/x/xb 及 + 组合。
     指定 encoding 时自动处理文本编解码（底层始终以二进制操作）。
@@ -131,7 +130,7 @@ class AsyncFile:
                 return "" if self._is_text else b""
             self._line_buffer += chunk
 
-    async def readlines(self, hint: int = -1) -> list:
+    async def readlines(self, hint: int = -1) -> list[str | bytes]:
         if self._closed:
             raise ValueError("I/O operation on closed file.")
         lines = []

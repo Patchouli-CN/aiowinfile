@@ -1,3 +1,4 @@
+#ifdef _WIN32
 #pragma once
 #include <windows.h>
 #include <string>
@@ -46,6 +47,23 @@ struct PoolKeyHash {
 // Default values can be overridden via runtime API.
 static constexpr size_t HANDLE_POOL_DEFAULT_MAX_PER_KEY = 64;
 static constexpr size_t HANDLE_POOL_DEFAULT_MAX_TOTAL   = 2048;
+
+// Try to acquire a cached HANDLE. Returns INVALID_HANDLE_VALUE on miss.
+HANDLE handle_pool_acquire(const PoolKey &key);
+
+// Donate a HANDLE back to the pool. May evict an old entry if full.
+void handle_pool_release(const PoolKey &key, HANDLE h);
+
+// Canonicalize path for pooling (lowercase on Windows).
+std::string canonicalize_path(const std::string &path);
+
+// Create PoolKey from path, access, disp.
+PoolKey make_pool_key(const std::string &path, DWORD access, DWORD disp);
+
+// Drain the pool (close all cached handles). Called on shutdown.
+void drain_pool();
+
+#endif
 
 // Try to acquire a cached HANDLE. Returns INVALID_HANDLE_VALUE on miss.
 HANDLE handle_pool_acquire(const PoolKey &key);

@@ -4,9 +4,7 @@
 #include <mutex>
 #include <vector>
 
-// ════════════════════════════════════════════════════════════════════════════
-// §3  LoopHandle  –  batched call_soon_threadsafe dispatcher
-// ════════════════════════════════════════════════════════════════════════════
+// LoopHandle - batched call_soon_threadsafe dispatcher
 
 struct BatchEntry {
     PyObject *set_fn;  // owned

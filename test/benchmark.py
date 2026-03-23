@@ -16,11 +16,11 @@ except ImportError:
     RICH_PROGRESS_AVAILABLE = False
 
 try:
-    import aiowinfile
+    import ayafileio
     # 性能调优可以加这个，让测试结果更准确
-    aiowinfile.set_handle_pool_limits(512, 16384)
+    ayafileio.set_handle_pool_limits(512, 16384)
 except ImportError:
-    aiowinfile = None
+    ayafileio = None
 
 try:
     import aiofiles
@@ -36,7 +36,7 @@ class ServerBenchmark:
         self.config = config or DEFAULT_CONFIG
         
         # 确保依赖可用
-        self.aiowinfile_available = aiowinfile is not None
+        self.ayafileio_available = ayafileio is not None
         self.aiofiles_available = aiofiles is not None
         
         # 进度回调
@@ -59,7 +59,7 @@ class ServerBenchmark:
                 from ctypes import wintypes
                 kernel32 = ctypes.windll.kernel32
                 handle_count = wintypes.ULONG()
-                if kernel32.GetProcessHandleCount(process._handle, ctypes.byref(handle_count)):
+                if kernel32.GetProcessHandleCount(process._handle, ctypes.byref(handle_count)): # type: ignore
                     handle_count = handle_count.value
                 else:
                     handle_count = 0
@@ -92,13 +92,13 @@ class ServerBenchmark:
             except:
                 pass
     
-    async def test_aiowinfile(self, file_paths: list[str], num_clients: int) -> PerformanceMetrics:
-        """测试 aiowinfile - 真正的异步"""
-        if not self.aiowinfile_available:
-            return PerformanceMetrics(name="aiowinfile", completed=False)
+    async def test_ayafileio(self, file_paths: list[str], num_clients: int) -> PerformanceMetrics:
+        """测试 ayafileio - 真正的异步"""
+        if not self.ayafileio_available:
+            return PerformanceMetrics(name="ayafileio", completed=False)
         
         metrics = PerformanceMetrics()
-        metrics.name = "aiowinfile (IOCP真异步)"
+        metrics.name = "ayafileio (IOCP真异步)"
         metrics.concurrent_clients = num_clients
         stop_event = asyncio.Event()
         
@@ -123,7 +123,7 @@ class ServerBenchmark:
                     
                     if op_type == 'read':
                         if file_path not in file_handles:
-                            file_handles[file_path] = aiowinfile.open(file_path, 'rb')
+                            file_handles[file_path] = ayafileio.open(file_path, 'rb')
                         f = file_handles[file_path]
                         
                         # 更大范围的随机偏移
@@ -135,7 +135,7 @@ class ServerBenchmark:
                     else:
                         # 写入临时文件，避免影响读取测试
                         write_path = self.test_dir / f"write_{client_id}_{random.randint(1,10000)}.tmp"
-                        async with aiowinfile.open(str(write_path), 'wb') as f:
+                        async with ayafileio.open(str(write_path), 'wb') as f:
                             data = os.urandom(4096)
                             await f.write(data)
                             local_bytes += len(data)
@@ -397,7 +397,7 @@ class ServerBenchmark:
         for clients in client_counts:
             if progress is not None:
                 progress.update(task, description=f"aiowinfile {clients}并发 测试中") # type: ignore
-            win_metrics = await self.test_aiowinfile(file_paths, clients)
+            win_metrics = await self.test_ayafileio(file_paths, clients)
             results.append(win_metrics)
             if progress is not None:
                 progress.update(task, advance=1) # type: ignore

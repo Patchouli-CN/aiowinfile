@@ -75,7 +75,7 @@ async def main():
         console.print("\n[bold green]📊 测试结果汇总[/bold green]")
         
         for r in results:
-            if 'aiowinfile' in r.name:
+            if 'ayafileio' in r.name:
                 color = "green"
             else:
                 color = "yellow" if r.completed else "red"
@@ -99,7 +99,7 @@ async def main():
             console.print(table)
     
     # 生成 HTML 报告
-    report_gen = HTMLReportGenerator("公平对比: aiowinfile vs aiofiles 性能测试报告")
+    report_gen = HTMLReportGenerator("公平对比: ayafileio vs aiofiles 性能测试报告")
     report_gen.set_system_info({
         'os': platform.platform(),
         'python_version': platform.python_version(),

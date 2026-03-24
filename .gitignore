@@ -15,3 +15,5 @@ ignore/
 commands.txt
 
 /benchmark_data
+
+.ruff_cache

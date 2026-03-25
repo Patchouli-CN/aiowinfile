@@ -16,6 +16,14 @@ try:
 except Exception:
     _has_native_set_iocp = False
 
+# 尝试导入跨平台的 set_worker_count（若扩展提供）
+_has_native_set_worker = False
+try:
+    from ._ayafileio import set_worker_count as _set_worker_count
+    _has_native_set_worker = True
+except Exception:
+    _has_native_set_worker = False
+
 # 导入本机 cleanup（若存在）
 try:
     from ._ayafileio import cleanup as _native_cleanup
@@ -50,10 +58,13 @@ def set_io_worker_count(count: int = 0) -> None:
         raise TypeError("count must be int")
     if not (count == 0 or (1 <= count <= 128)):
         raise ValueError("worker count must be 0 (auto) or 1-128")
-    if _has_native_set_iocp:
-        _set_iocp_worker_count(count) # type: ignore
+    # 优先使用原生跨平台接口（若可用），其次回退到 Windows 专用接口；最后回退到模块状态存储
+    if _has_native_set_worker:
+        _set_worker_count(count)  # type: ignore
+    elif _has_native_set_iocp:
+        _set_iocp_worker_count(count)  # type: ignore
     else:
-        # 非 Windows 平台：记录到模块变量，供未来后端使用或查询
+        # 若扩展未导出任何 setter，则记录到模块变量，供纯 Python 或后续扩展使用
         globals()['_io_worker_count'] = count
 
 

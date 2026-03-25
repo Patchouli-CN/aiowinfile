@@ -4,6 +4,7 @@
 #ifdef _WIN32
 #include <windows.h>
 #endif
+#include <atomic>
 
 namespace py = pybind11;
 
@@ -22,6 +23,12 @@ extern PyObject *g_str_set_result;
 extern PyObject *g_str_set_exception;
 extern PyObject *g_str_create_future;
 extern PyObject *g_str_call_soon_ts;
+
+// 全局可配置的 IO worker count（跨平台）。0 = 自动
+extern std::atomic<unsigned> g_worker_count;
+
+// 设置全局 worker count（暴露给绑定）
+void set_worker_count(unsigned count);
 
 void cache_globals();
 

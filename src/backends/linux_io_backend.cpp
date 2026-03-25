@@ -6,6 +6,8 @@
 #include <errno.h>
 #include <algorithm>
 #include <pthread.h>
+#include "../globals.hpp"
+#include <thread>
 
 // cached event loop
 static PyObject   *g_cachedLoop       = nullptr;
@@ -59,8 +61,15 @@ LinuxIOBackend::LinuxIOBackend(const std::string &path, const std::string &mode)
         }
     }
 
-    // Start worker threads
-    unsigned num_workers = 4; // or get from config
+    // Start worker threads — 尊重全局配置 g_worker_count（0 = 自动）
+    unsigned num_workers = g_worker_count.load();
+    if (num_workers == 0) {
+        unsigned hc = std::thread::hardware_concurrency();
+        if (hc == 0) hc = 1;
+        num_workers = std::max(1u, std::min(hc * 2u, 16u));
+    } else if (!(num_workers >= 1 && num_workers <= 128)) {
+        throw py::value_error("worker count must be 0 (auto) or 1-128");
+    }
     for (unsigned i = 0; i < num_workers; ++i) {
         m_workers.emplace_back(&LinuxIOBackend::worker_thread, this);
     }

@@ -88,5 +88,8 @@ PYBIND11_MODULE(_ayafileio, m) {
     m.def("set_iocp_worker_count",&set_iocp_worker_count,
         "set iocp worker count");
 #endif
+    // 跨平台 worker count 设置（0=自动，1-128=手动）
+    m.def("set_worker_count", &set_worker_count,
+        "Set global IO worker count (cross-platform)", py::arg("count"));
 }
 

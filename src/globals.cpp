@@ -12,6 +12,17 @@ PyObject *g_str_set_exception = nullptr;
 PyObject *g_str_create_future = nullptr;
 PyObject *g_str_call_soon_ts  = nullptr;
 
+// 全局 worker count（0 = 自动）
+std::atomic<unsigned> g_worker_count{0};
+
+void set_worker_count(unsigned count) {
+    if (count == 0 || (count >= 1 && count <= 128)) {
+        g_worker_count.store(count);
+    } else {
+        throw std::runtime_error("worker count must be 0 (auto) or 1-128");
+    }
+}
+
 void cache_globals() {
     auto *builtins = PyImport_ImportModule("builtins");
     g_OSError           = PyObject_GetAttrString(builtins, "OSError");

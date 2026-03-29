@@ -29,7 +29,19 @@ jobs:
           python -m pip install --upgrade pip
           pip install build scikit-build-core nanobind
       
-      - name: Build wheel
+      # 关键修改：对于 Linux，使用 manylinux 镜像来构建
+      - name: Build wheel on Linux
+        if: runner.os == 'Linux'
+        uses: docker://quay.io/pypa/manylinux2014_x86_64:latest
+        with:
+          args: >
+            bash -c "
+              /opt/python/cp311-cp311/bin/python -m pip install build scikit-build-core nanobind &&
+              /opt/python/cp311-cp311/bin/python -m build --wheel --outdir dist
+            "
+      
+      - name: Build wheel on Windows/macOS
+        if: runner.os != 'Linux'
         run: |
           python -m build --wheel --outdir dist
       
@@ -49,7 +61,6 @@ jobs:
             fi
           done
       
-      # 关键：上传 artifacts
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.os }}

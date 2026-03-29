@@ -48,16 +48,25 @@ jobs:
               unzip -l "$wheel" | grep -E "(_ayafileio|\.so|\.pyd)" || echo "WARNING: No extension found!"
             fi
           done
+      
+      # 关键：上传 artifacts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: dist/*.whl
+          retention-days: 7
+          if-no-files-found: error
 
   publish:
     name: Publish to PyPI
     needs: build_wheels
     runs-on: ubuntu-latest
+    # 只在推送 tag 或手动触发时发布
+    if: |
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+      github.event_name == 'workflow_dispatch'
     
     steps:
-      - name: Create dist directory
-        run: mkdir -p dist
-
       - uses: actions/download-artifact@v4
         with:
           pattern: wheels-*
@@ -67,10 +76,10 @@ jobs:
       - name: List all collected wheels
         shell: bash
         run: |
-          echo "=== Directory structure ==="
-          find dist -type f -name "*.whl"
-          echo "=== All wheels ==="
-          find dist -name "*.whl" -exec ls -la {} \;
+          echo "=== Collected wheels ==="
+          ls -la dist/
+          echo "=== Wheel count ==="
+          ls -la dist/*.whl 2>/dev/null | wc -l
       
       - name: Publish to PyPI
         env:
@@ -80,5 +89,4 @@ jobs:
           pip install --upgrade pip
           pip install twine
           echo "=== Publishing to PyPI ==="
-          # 使用 find 找到所有 wheel 文件
-          find dist -name "*.whl" -exec twine upload --skip-existing {} +
+          twine upload --skip-existing dist/*.whl --verbose

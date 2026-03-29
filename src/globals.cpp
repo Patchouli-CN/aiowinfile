@@ -50,6 +50,6 @@ void cache_globals() {
         : PyObject_CallFunction(cls, "is",  (int)err, msg);
     PyErr_SetObject((PyObject *)Py_TYPE(exc), exc);
     Py_DECREF(exc);
-    throw py::error_already_set();
+    throw py::python_error();
 }
 #endif

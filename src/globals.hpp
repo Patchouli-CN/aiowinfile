@@ -1,12 +1,21 @@
 #pragma once
 #define PY_SSIZE_T_CLEAN
-#include <pybind11/pybind11.h>
+#include <Python.h>
+#include <nanobind/nanobind.h>
+
 #ifdef _WIN32
 #include <windows.h>
 #endif
+#ifndef _WIN32
+#include <cstdint>
+using DWORD = uint32_t;
+using HANDLE = int;
+static constexpr HANDLE INVALID_HANDLE_VALUE = (HANDLE)-1;
+static inline void CloseHandle(HANDLE) { (void)0; }
+#endif
 #include <atomic>
 
-namespace py = pybind11;
+namespace py = nanobind;
 
 // ════════════════════════════════════════════════════════════════════════════
 // §1  Cached CPython globals

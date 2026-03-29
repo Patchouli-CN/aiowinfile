@@ -1,5 +1,5 @@
 /*
- * bindings.cpp - pybind11 module entry point
+ * bindings.cpp - nanobind module entry point
  */
 #include "globals.hpp"
 #ifdef _WIN32
@@ -8,47 +8,53 @@
 #include "file_handle.hpp"
 #include "handle_pool.hpp"
 
-// pybind11 bindings
+// nanobind bindings
 
 struct PyAsyncFile {
     FileHandle *fh;
-    explicit PyAsyncFile(const std::string &path, const std::string &mode)
-        : fh(new FileHandle(path, mode)) {}
+    // 修改构造函数：接受 py::object 或 const char*
+    explicit PyAsyncFile(const char* path, const char* mode = "rb")
+        : fh(new FileHandle(std::string(path), std::string(mode))) {}
+
     ~PyAsyncFile() { delete fh; }
 
     py::object read(int64_t size = -1) {
         PyObject *r = fh->read(size);
-        if (!r) throw py::error_already_set();
-        return py::reinterpret_steal<py::object>(r);
+        if (!r) throw py::python_error();
+        return py::steal<py::object>(py::handle(r));
     }
     py::object write(py::object data) {
-        Py_buffer view{};
-        if (PyObject_GetBuffer(data.ptr(), &view, PyBUF_SIMPLE) < 0)
-            throw py::error_already_set();
+        // 使用 Python C API 获取 buffer
+        Py_buffer view;
+        if (PyObject_GetBuffer(data.ptr(), &view, PyBUF_SIMPLE) < 0) {
+            throw py::python_error();
+        }
+        
         PyObject *r = fh->write(&view);
         PyBuffer_Release(&view);
-        if (!r) throw py::error_already_set();
-        return py::reinterpret_steal<py::object>(r);
+        
+        if (!r) throw py::python_error();
+        return py::steal<py::object>(py::handle(r));
     }
     py::object seek(int64_t offset, int whence = 0) {
         PyObject *r = fh->seek(offset, whence);
-        if (!r) throw py::error_already_set();
-        return py::reinterpret_steal<py::object>(r);
+        if (!r) throw py::python_error();
+        return py::steal<py::object>(py::handle(r));
     }
     py::object flush() {
         PyObject *r = fh->flush();
-        if (!r) throw py::error_already_set();
-        return py::reinterpret_steal<py::object>(r);
+        if (!r) throw py::python_error();
+        return py::steal<py::object>(py::handle(r));
     }
     py::object close() {
         PyObject *r = fh->close();
-        if (!r) throw py::error_already_set();
-        return py::reinterpret_steal<py::object>(r);
+        if (!r) throw py::python_error();
+        return py::steal<py::object>(py::handle(r));
     }
     void close_impl() { fh->close_impl(); }
 };
 
-PYBIND11_MODULE(_ayafileio, m) {
+NB_MODULE(_ayafileio, m) {
     m.doc() = "Cross-platform async file I/O module";
 
     cache_globals();
@@ -68,7 +74,7 @@ PYBIND11_MODULE(_ayafileio, m) {
     }, "Perform native cleanup (safe to call from Python atexit)");
 
     py::class_<PyAsyncFile>(m, "AsyncFile")
-        .def(py::init<const std::string &, const std::string &>(),
+        .def(py::init<const char*, const char*>(),
              py::arg("path"), py::arg("mode") = "rb")
         .def("read",  &PyAsyncFile::read,  py::arg("size") = -1)
         .def("write", &PyAsyncFile::write)
@@ -81,8 +87,10 @@ PYBIND11_MODULE(_ayafileio, m) {
         "Set handle pool max_per_key and max_total",
         py::arg("max_per_key"), py::arg("max_total"));
 
-    m.def("get_handle_pool_limits", &get_handle_pool_limits,
-        "Get current handle pool limits as (max_per_key, max_total)");
+    m.def("get_handle_pool_limits", []() {
+        auto p = get_handle_pool_limits();
+        return py::make_tuple(p.first, p.second);
+    }, "Get current handle pool limits as (max_per_key, max_total)");
 
 #ifdef _WIN32
     m.def("set_iocp_worker_count",&set_iocp_worker_count,

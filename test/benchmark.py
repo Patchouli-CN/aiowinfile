@@ -227,39 +227,44 @@ class ServerBenchmark:
             local_errors = 0
             local_latencies = []
             
-            while not stop_event.is_set():
-                try:
-                    file_path = random.choice(file_paths)
-                    op_type = random.choices(
-                        ['read', 'write'],
-                        weights=[read_ratio, write_ratio]
-                    )[0]
-                    
-                    start_time = time.perf_counter()
-                    
-                    if op_type == 'read':
-                        async with aiofiles.open(file_path, 'rb') as f:
-                            max_offset = 500 * 1024 * 1024
-                            offset = random.randint(0, max_offset - 64*1024)
-                            await f.seek(offset)
-                            data = await f.read(64 * 1024)
-                            local_bytes += len(data)
-                    else:
-                        write_path = self.test_dir / f"aio_write_{client_id}_{random.randint(1,10000)}.tmp"
-                        async with aiofiles.open(str(write_path), 'wb') as f:
-                            data = os.urandom(4096)
-                            await f.write(data)
-                            local_bytes += len(data)
-                    
-                    latency = time.perf_counter() - start_time
-                    local_latencies.append(latency)
-                    local_ops += 1
-                    await asyncio.sleep(random.uniform(0, 0.002))
-                    
-                except Exception as e:
-                    local_errors += 1
-            
-            return local_ops, local_bytes, local_errors, local_latencies
+            try:
+                while not stop_event.is_set():
+                    try:
+                        file_path = random.choice(file_paths)
+                        op_type = random.choices(
+                            ['read', 'write'],
+                            weights=[read_ratio, write_ratio]
+                        )[0]
+                        
+                        start_time = time.perf_counter()
+                        
+                        if op_type == 'read':
+                            async with aiofiles.open(file_path, 'rb') as f:
+                                max_offset = 500 * 1024 * 1024
+                                offset = random.randint(0, max_offset - 64*1024)
+                                await f.seek(offset)
+                                data = await f.read(64 * 1024)
+                                local_bytes += len(data)
+                        else:
+                            write_path = self.test_dir / f"aio_write_{client_id}_{random.randint(1,10000)}.tmp"
+                            async with aiofiles.open(str(write_path), 'wb') as f:
+                                data = os.urandom(4096)
+                                await f.write(data)
+                                local_bytes += len(data)
+                        
+                        latency = time.perf_counter() - start_time
+                        local_latencies.append(latency)
+                        local_ops += 1
+                        await asyncio.sleep(random.uniform(0, 0.002))
+                        
+                    except asyncio.CancelledError:
+                        break
+                    except Exception as e:
+                        local_errors += 1
+                
+                return local_ops, local_bytes, local_errors, local_latencies
+            except asyncio.CancelledError:
+                return local_ops, local_bytes, local_errors, local_latencies
         
         # 启动客户端
         clients = [asyncio.create_task(client_worker(i)) for i in range(num_clients)]
@@ -268,22 +273,51 @@ class ServerBenchmark:
         await asyncio.sleep(self.config.duration_seconds)
         stop_event.set()
         
-        # 收集结果
+        # 收集结果，使用 gather 但带超时
         try:
-            results = await asyncio.wait_for(asyncio.gather(*clients), timeout=5.0)
+            results = await asyncio.wait_for(
+                asyncio.gather(*clients, return_exceptions=True), 
+                timeout=10.0  # 给足够时间让所有任务完成
+            )
         except asyncio.TimeoutError:
+            # 取消所有未完成的任务
             for c in clients:
-                c.cancel()
-            results = [(0, 0, 0, []) for _ in clients]
+                if not c.done():
+                    c.cancel()
+            
+            # 等待取消完成
+            await asyncio.sleep(0.5)
+            
+            # 收集已完成的结果
+            results = []
+            for c in clients:
+                if c.done() and not c.cancelled():
+                    try:
+                        results.append(c.result())
+                    except:
+                        results.append((0, 0, 0, []))
+                else:
+                    results.append((0, 0, 0, []))
         
-        metrics.total_operations = sum(r[0] for r in results)
-        metrics.total_bytes = sum(r[1] for r in results)
-        metrics.error_count = sum(r[2] for r in results)
+        # 处理结果（包括异常情况）
+        valid_results = []
         for r in results:
+            if isinstance(r, Exception):
+                continue
+            valid_results.append(r)
+        
+        if not valid_results:
+            return metrics
+        
+        metrics.total_operations = sum(r[0] for r in valid_results)
+        metrics.total_bytes = sum(r[1] for r in valid_results)
+        metrics.error_count = sum(r[2] for r in valid_results)
+        for r in valid_results:
             metrics.raw_latencies.extend(r[3])
         
         metrics.total_time = self.config.duration_seconds
         metrics.calculate_percentiles()
+        metrics.completed = True
         
         return metrics
     

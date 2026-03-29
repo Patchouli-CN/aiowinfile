@@ -4,7 +4,7 @@ LoopHandle::LoopHandle(PyObject *loop) {
     call_soon_ts = PyObject_GetAttr(loop, g_str_call_soon_ts);
     batch.reserve(64);
 
-    py::cpp_function fn([this]() {
+    py::object fn = py::cpp_function([this]() {
         std::vector<BatchEntry> local;
         {
             std::lock_guard<std::mutex> lk(batch_mtx);
@@ -12,7 +12,7 @@ LoopHandle::LoopHandle(PyObject *loop) {
             dispatch_pending.store(false, std::memory_order_release);
         }
         for (auto &e : local) {
-            PyObject *r = PyObject_CallOneArg(e.set_fn, e.val);
+            PyObject *r = PyObject_CallFunctionObjArgs(e.set_fn, e.val, nullptr);
             if (!r) PyErr_Print(); else Py_DECREF(r);
             Py_DECREF(e.set_fn);
             Py_DECREF(e.val);
@@ -39,7 +39,14 @@ void LoopHandle::push(PyObject *set_fn, PyObject *val) {
     }
     if (need_schedule) {
         PyObject *r = PyObject_CallFunctionObjArgs(call_soon_ts, drain_cb, nullptr);
-        if (!r) PyErr_Print(); else Py_DECREF(r);
+        if (!r) {
+            // 调度失败：打印错误并重置 dispatch_pending，避免批处理永远不被调度
+            PyErr_Print();
+            std::lock_guard<std::mutex> lk(batch_mtx);
+            dispatch_pending.store(false, std::memory_order_relaxed);
+        } else {
+            Py_DECREF(r);
+        }
     }
 }
 

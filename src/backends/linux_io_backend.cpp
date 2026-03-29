@@ -24,7 +24,7 @@ static void refresh_loop_cache(PyObject *loop) {
 
 LinuxIOBackend::LinuxIOBackend(const std::string &path, const std::string &mode) {
     PyObject *loop = PyObject_CallNoArgs(g_get_running_loop);
-    if (!loop) throw py::error_already_set();
+    if (!loop) throw py::python_error();
     refresh_loop_cache(loop);
     m_loop          = loop;
     m_create_future = g_cachedFutureFn; Py_INCREF(m_create_future);
@@ -48,7 +48,7 @@ LinuxIOBackend::LinuxIOBackend(const std::string &path, const std::string &mode)
 
     m_fd = open(path.c_str(), flags, 0644);
     if (m_fd == -1) {
-        throw py::error_already_set();
+        throw py::python_error();
     }
 
     m_running.store(true, std::memory_order_release);
@@ -309,7 +309,7 @@ void LinuxIOBackend::complete_error_inline(IORequest *req, DWORD err) {
     PyObject *exc_class = g_OSError;
     PyObject *exc = PyObject_CallFunction(exc_class, "is", (int)err, "I/O operation failed");
     PyObject *set_fn = req->set_exception; req->set_exception = nullptr;
-    PyObject *r = PyObject_CallOneArg(set_fn, exc);
+    PyObject *r = PyObject_CallFunctionObjArgs(set_fn, exc, nullptr);
     Py_XDECREF(r); Py_DECREF(set_fn); Py_DECREF(exc);
     delete req;
 }

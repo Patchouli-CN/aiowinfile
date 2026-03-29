@@ -1,9 +1,11 @@
 #include "handle_pool.hpp"
 #include <algorithm>
 #include <cctype>
-#include <pybind11/pybind11.h>
+#include <nanobind/nanobind.h>
+#include <atomic>
+#include <mutex>
 
-namespace py = pybind11; 
+namespace py = nanobind; 
 
 static std::shared_mutex                                           g_hpMtx;
 static std::unordered_map<PoolKey, std::vector<HANDLE>, PoolKeyHash> g_hpMap;

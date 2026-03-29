@@ -1,34 +1,22 @@
-#ifdef _WIN32
+// Cross-platform handle pool header: provide a single, safe interface
 #pragma once
-#include <windows.h>
+#include "globals.hpp"
 #include <string>
 #include <shared_mutex>
 #include <vector>
 #include <unordered_map>
 
 // ════════════════════════════════════════════════════════════════════════════
-// §9  Handle Pool  –  reuse HANDLE + IOCP association across open/close cycles
-//
-// Problem: CreateFileA + CreateIoCompletionPort are expensive syscalls.
-// For workloads that open/read/close many files (scenario 1/3/5), each
-// open pays this cost even if the same path was recently used.
-//
-// Solution: When a FileHandle is closed, instead of CloseHandle(), donate
-// the HANDLE back to the pool keyed by (canonical_path, access_flags).
-// The next open() for the same path+mode retrieves the cached HANDLE,
-// skipping both CreateFileA and CreateIoCompletionPort entirely.
-//
-// Constraints:
-//   - Pool is bounded (MAX_PER_KEY per key, MAX_TOTAL total).
-//   - Entries are evicted (CloseHandle) when the pool is full.
-//   - On process shutdown, drain_pool() closes all cached handles.
-//   - Thread-safe: use shared_mutex for better concurrency (readers can proceed in parallel).
+// Handle Pool — the pool implementation is Windows-specific but the
+// interface is exported on all platforms. On non-Windows platforms the
+// implementation is a no-op / stub so the Python-visible API remains
+// consistent and headers can be included without pulling Windows types.
 // ════════════════════════════════════════════════════════════════════════════
 
 struct PoolKey {
     std::string path;   // canonical (lowercased) path
-    DWORD       access; // GENERIC_READ | GENERIC_WRITE combination
-    DWORD       disp;   // creation disposition
+    DWORD       access; // GENERIC_READ | GENERIC_WRITE combination (platform-defined)
+    DWORD       disp;   // creation disposition (platform-defined)
 
     bool operator==(const PoolKey &o) const noexcept {
         return access == o.access && disp == o.disp && path == o.path;
@@ -51,23 +39,6 @@ static constexpr size_t HANDLE_POOL_DEFAULT_MAX_TOTAL   = 2048;
 // Try to acquire a cached HANDLE. Returns INVALID_HANDLE_VALUE on miss.
 HANDLE handle_pool_acquire(const PoolKey &key);
 
-// Donate a HANDLE back to the pool. May evict an old entry if full.
-void handle_pool_release(const PoolKey &key, HANDLE h);
-
-// Canonicalize path for pooling (lowercase on Windows).
-std::string canonicalize_path(const std::string &path);
-
-// Create PoolKey from path, access, disp.
-PoolKey make_pool_key(const std::string &path, DWORD access, DWORD disp);
-
-// Drain the pool (close all cached handles). Called on shutdown.
-void drain_pool();
-
-#endif
-
-// Try to acquire a cached HANDLE. Returns INVALID_HANDLE_VALUE on miss.
-HANDLE handle_pool_acquire(const PoolKey &key);
-
 // Return a HANDLE to the pool. Closes it immediately if pool is full.
 void handle_pool_release(const PoolKey &key, HANDLE h);
 
@@ -77,6 +48,6 @@ void handle_pool_drain();
 // Build a canonical PoolKey from open() parameters.
 PoolKey make_pool_key(const std::string &path, DWORD access, DWORD disp);
 
-// 运行时控制池大小
+// Runtime control of pool sizes
 void set_handle_pool_limits(size_t max_per_key, size_t max_total);
 std::pair<size_t, size_t> get_handle_pool_limits();

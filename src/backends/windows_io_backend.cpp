@@ -20,7 +20,7 @@ WindowsIOBackend::WindowsIOBackend(const std::string &path, const std::string &m
     if (!ctrl_reg) { SetConsoleCtrlHandler(ctrl_handler, TRUE); ctrl_reg = true; }
 
     PyObject *loop = PyObject_CallNoArgs(g_get_running_loop);
-    if (!loop) throw py::error_already_set();
+    if (!loop) throw py::python_error();
     refresh_loop_cache(loop);
     m_loop          = loop;
     m_create_future = g_cachedFutureFn; Py_INCREF(m_create_future);
@@ -322,14 +322,14 @@ void WindowsIOBackend::complete_error_inline(IORequest *req, DWORD err) {
     PyObject *exc_class = map_win_error(err);
     PyObject *exc = PyObject_CallFunction(exc_class, "is", (int)err, "I/O operation failed");
     PyObject *set_fn = req->set_exception; req->set_exception = nullptr;
-    PyObject *r = PyObject_CallOneArg(set_fn, exc);
+    PyObject *r = PyObject_CallFunctionObjArgs(set_fn, exc, nullptr);
     Py_XDECREF(r); Py_DECREF(set_fn); Py_DECREF(exc);
     delete req;
 }
 
 void IOBackendBase::resolve_ok(PyObject *future, PyObject *val) {
     PyObject *fn = PyObject_GetAttr(future, g_str_set_result);
-    PyObject *r  = PyObject_CallOneArg(fn, val);
+    PyObject *r  = PyObject_CallFunctionObjArgs(fn, val, nullptr);
     Py_XDECREF(r); Py_DECREF(fn);
 }
 
@@ -343,6 +343,6 @@ void IOBackendBase::resolve_exc(PyObject *future, PyObject *cls, DWORD err, cons
         ? PyObject_CallFunction(cls, "is", (int)err, msg)
         : PyObject_CallFunction(cls, "s",  msg);
     PyObject *fn = PyObject_GetAttr(future, g_str_set_exception);
-    PyObject *r  = PyObject_CallOneArg(fn, exc);
+    PyObject *r  = PyObject_CallFunctionObjArgs(fn, exc, nullptr);
     Py_XDECREF(r); Py_DECREF(fn); Py_DECREF(exc);
 }

@@ -8,7 +8,6 @@ __pycache__
 *.pyd
 
 build/
-dist/
 
 ignore/
 
@@ -17,3 +16,23 @@ commands.txt
 /benchmark_data
 
 .ruff_cache
+
+# CMake
+build/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+
+# Python build
+dist/
+*.egg-info/
+__pycache__/
+*.pyc
+*.pyd
+*.so
+
+# IDE
+.vscode/
+.idea/

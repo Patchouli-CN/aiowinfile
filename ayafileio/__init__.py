@@ -32,7 +32,6 @@ except Exception:
 
 _DEFAULT_READLINE_BUF = 65536  # 64 KB – much faster than 4 KB for large files
 
-
 def set_handle_pool_limits(max_per_key: int, max_total: int) -> None:
     """设置句柄池容量限制。"""
     if max_per_key <= 0 or max_total <= 0:
@@ -142,7 +141,7 @@ class AsyncFile:
                 raise ValueError(f"Invalid mode: '{mode}'")
             clean = base_char + ("+" if has_plus else "") + "b"
 
-        self._impl = _AsyncFile(self._path, clean)
+            self._impl = _AsyncFile(self._path, clean)
         self._line_buffer = b""
 
     # ── context manager ───────────────────────────────────────────────────────

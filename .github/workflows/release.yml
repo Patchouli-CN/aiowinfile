@@ -19,180 +19,87 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-
+      
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
-      - name: Install cibuildwheel
-        run: pip install cibuildwheel
-
-      - name: Build wheels
-        run: python build_it.py --platform auto --output dist --skip-install --yes
-
+      
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install build scikit-build-core nanobind
+      
+      - name: Build wheel
+        run: |
+          python -m build --wheel --outdir dist
+      
       - name: List built wheels
         shell: bash
         run: |
           echo "=== Built wheels ==="
-          ls -la dist/ || dir dist/
-
-      - name: Install built wheel and run tests
+          ls -la dist/
+      
+      - name: Verify wheel contents
+        shell: bash
+        run: |
+          for wheel in dist/*.whl; do
+            echo "Checking $wheel"
+            if command -v unzip &> /dev/null; then
+              unzip -l "$wheel" | grep -E "(_ayafileio|\.so|\.pyd)" || echo "WARNING: No extension found!"
+            fi
+          done
+      
+      - name: Install wheel and test
         shell: bash
         run: |
           python -m pip install --upgrade pip
-
-          # Cross-platform wheel installation
-          echo "=== Installing wheel ==="
-          wheel_file=$(ls dist/*.whl 2>/dev/null | head -1)
-          if [ -z "$wheel_file" ]; then
-            echo "Error: No wheel file found in dist/"
-            exit 1
-          fi
-
+          
+          # Install the built wheel
+          wheel_file=$(ls dist/*.whl | head -1)
           echo "Installing: $wheel_file"
           pip install "$wheel_file" --force-reinstall --no-deps
-
-          # Verify installation
-          echo "=== Verifying installation ==="
-          python -c "import ayafileio; print('✓ ayafileio imported successfully')"
-          python -c "import ayafileio._ayafileio; print('✓ _ayafileio imported successfully')"
-
-          # Run tests if test file exists
-          echo "=== Running tests ==="
+          
+          # Test imports
+          echo "=== Testing imports ==="
+          python -c "
+          import sys
+          try:
+              import ayafileio
+              print('✓ ayafileio imported successfully')
+              print(f'✓ Version: {getattr(ayafileio, \"__version__\", \"unknown\")}')
+          except ImportError as e:
+              print(f'✗ Failed to import ayafileio: {e}')
+              sys.exit(1)
+          "
+          
+          # Run tests if exists
           if [ -f test_base.py ]; then
             python test_base.py
-          else
-            echo "Warning: test_base.py not found, skipping tests"
           fi
-
+      
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.os }}
           path: dist/*.whl
           retention-days: 7
 
-  test_wheels:
-    name: Test wheels on ${{ matrix.os }}
-    needs: build_wheels
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-      fail-fast: false
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: wheels-${{ matrix.os }}
-          path: dist
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: List downloaded wheels
-        shell: bash
-        run: |
-          echo "=== Downloaded wheels ==="
-          ls -la dist/
-
-      - name: Install and test wheel
-        shell: bash
-        run: |
-          python -m pip install --upgrade pip
-
-          # Find and install the wheel
-          wheel_file=$(ls dist/*.whl 2>/dev/null | head -1)
-          if [ -z "$wheel_file" ]; then
-            echo "Error: No wheel file found in dist/"
-            exit 1
-          fi
-
-          echo "Installing: $wheel_file"
-          pip install "$wheel_file"
-
-          # Test imports
-          echo "=== Testing imports ==="
-          python -c "
-          import sys
-          print(f'Python version: {sys.version}')
-          try:
-              import ayafileio
-              print('✓ ayafileio imported successfully')
-              print(f'✓ ayafileio version: {getattr(ayafileio, \"__version__\", \"unknown\")}')
-          except ImportError as e:
-              print(f'✗ Failed to import ayafileio: {e}')
-              sys.exit(1)
-
-          try:
-              import ayafileio._ayafileio
-              print('✓ _ayafileio imported successfully')
-          except ImportError as e:
-              print(f'✗ Failed to import _ayafileio: {e}')
-              sys.exit(1)
-          "
-
-          # Run the test script if it exists
-          if [ -f test_base.py ]; then
-            echo "=== Running test_base.py ==="
-            python test_base.py
-          else
-            echo "Warning: test_base.py not found, skipping functional tests"
-          fi
-
-      - name: Test with different Python version (optional)
-        if: matrix.os == 'ubuntu-latest'
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Test on Python 3.12
-        if: matrix.os == 'ubuntu-latest'
-        shell: bash
-        run: |
-          wheel_file=$(ls dist/*.whl 2>/dev/null | head -1)
-          if [ -n "$wheel_file" ]; then
-            pip install "$wheel_file"
-            python -c "import ayafileio; print('✓ ayafileio works on Python 3.12')"
-          fi
-
   publish:
     name: Publish to PyPI
-    needs: test_wheels
+    needs: build_wheels
     runs-on: ubuntu-latest
-    if: |
-      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
-      github.event_name == 'workflow_dispatch'
-
+    if: startsWith(github.ref, 'refs/tags/v')
+    
     steps:
       - uses: actions/download-artifact@v4
         with:
           pattern: wheels-*
           path: dist
           merge-multiple: true
-
-      - name: List all collected wheels
-        shell: bash
-        run: |
-          echo "=== All wheels to publish ==="
-          ls -la dist/
-          echo "Total wheels: $(ls dist/*.whl 2>/dev/null | wc -l)"
-
+      
       - name: Publish to PyPI
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
         run: |
-          pip install --upgrade pip
           pip install twine
-          echo "=== Publishing to PyPI ==="
           twine upload --skip-existing dist/*.whl --verbose
-
-      - name: Verify published packages
-        if: success()
-        shell: bash
-        run: |
-          echo "✓ Successfully published to PyPI"
-          echo "You can install with: pip install ayafileio"

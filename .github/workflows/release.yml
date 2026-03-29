@@ -52,30 +52,3 @@ jobs:
         run: |
           pip install twine
           twine upload --skip-existing all_wheels/*.whl --verbose
-
-  create-release:
-    name: Create GitHub Release
-    needs: publish
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
-    steps:
-      - uses: actions/checkout@v4
-      - name: Get version
-        id: get_version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-      - uses: actions/download-artifact@v4
-        with:
-          path: wheels
-      - uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ steps.get_version.outputs.VERSION }}
-          name: Release ${{ steps.get_version.outputs.VERSION }}
-          body: |
-            ayafileio ${{ steps.get_version.outputs.VERSION }}
-            
-            安装: pip install ayafileio -U
-          files: wheels/**/*.whl
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

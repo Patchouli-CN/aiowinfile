@@ -50,76 +50,82 @@ jobs:
           echo "=== Installed package info ==="
           pip show ayafileio || true
 
-          cat > diag.py <<'PY'
-          import sys,os,traceback,glob
+          echo "=== Running unified Python diagnostics ==="
+          python - <<'PY'
+          import sys,os,traceback,glob,subprocess,platform
           print('python', sys.version)
-          print('sys.path:')
+          print('sys.path before cleanup:')
           print('\n'.join(sys.path))
+          # Remove current checkout path (cwd) from sys.path to prefer installed package
+          cwd = os.path.abspath(os.getcwd())
+          sys.path = [p for p in sys.path if not p and p != '' or os.path.abspath(p) != cwd]
+          print('sys.path after cleanup:')
+          print('\n'.join(sys.path))
+
+          pkgdir = None
           try:
-              import ayafileio
-              print('ayafileio __file__ =', ayafileio.__file__)
-              print('package dir listing:')
-              print('\n'.join(os.listdir(os.path.dirname(ayafileio.__file__))))
+            import ayafileio
+            pkgdir = os.path.dirname(ayafileio.__file__)
+            print('ayafileio __file__ =', ayafileio.__file__)
+            print('package dir listing:')
+            print('\n'.join(os.listdir(pkgdir)))
           except Exception:
-              traceback.print_exc()
+            traceback.print_exc()
+
           try:
-              import importlib
-              importlib.import_module('ayafileio._ayafileio')
-              print('Successfully imported ayafileio._ayafileio')
+            import importlib
+            importlib.import_module('ayafileio._ayafileio')
+            print('Successfully imported ayafileio._ayafileio')
           except Exception:
-              import traceback
-              print('Failed to import ayafileio._ayafileio:')
-              traceback.print_exc()
+            print('Failed to import ayafileio._ayafileio:')
+            traceback.print_exc()
+
+          if not pkgdir:
+            # try to find installed package dir
+            import pkgutil
+            spec = pkgutil.find_loader('ayafileio')
+            if spec and hasattr(spec, 'get_filename'):
               try:
-                  import ayafileio, glob, os
-                  pkgdir = os.path.dirname(ayafileio.__file__)
-                  print('pkgdir =', pkgdir)
-                  print('candidates:')
-                  print('\n'.join(glob.glob(os.path.join(pkgdir,'*'))))
+                fn = spec.get_filename()
+                pkgdir = os.path.dirname(fn)
               except Exception:
-                  pass
-          PY
+                pass
 
-          python diag.py || true
-          rm -f diag.py
+          print('pkgdir candidates:', pkgdir)
+          files = []
+          if pkgdir:
+            for p in glob.glob(os.path.join(pkgdir,'*')):
+              files.append(p)
+              print('candidate:', p)
 
-          echo "=== Inspect binary dependencies ==="
-          for f in $(python - <<'PY'
-          import os,glob,ayafileio
-          pkgdir=os.path.dirname(ayafileio.__file__)
-          print(' '.join(glob.glob(os.path.join(pkgdir,'*.so'))))
-          PY
-          ); do
-            if [ -n "$f" ]; then
-              echo "ldd $f"; ldd "$f" || true
-            fi
-          done
+          print('Platform.system() =', platform.system())
+          for f in files:
+            if f.endswith(('.so','.pyd','.dylib')):
+              print('Inspecting binary:', f)
+              if platform.system() == 'Linux':
+                try:
+                  subprocess.run(['ldd', f], check=False)
+                except Exception as e:
+                  print('ldd failed:', e)
+              elif platform.system() == 'Darwin':
+                try:
+                  subprocess.run(['otool', '-L', f], check=False)
+                except Exception as e:
+                  print('otool failed:', e)
 
-          for f in $(python - <<'PY'
-          import os,glob,ayafileio
-          pkgdir=os.path.dirname(ayafileio.__file__)
-          print(' '.join(glob.glob(os.path.join(pkgdir,'*.so'))))
-          PY
-          ); do
-            if [ -n "$f" ]; then
-              echo "otool -L $f"; otool -L "$f" || true
-            fi
-          done || true
-
-          echo "=== Run test_base.py (capture full traceback) ==="
-          python test_base.py || (
-            echo "test_base.py failed — showing Python import diagnostics";
-            python - <<'PY'
-            import traceback,sys
+          print('=== Running test_base.py ===')
+          try:
+            subprocess.run([sys.executable, 'test_base.py'], check=True)
+            print('test_base.py succeeded')
+          except subprocess.CalledProcessError:
+            print('test_base.py failed — dumping import diagnostics')
             try:
-                import ayafileio
-                print('ayafileio imported, __file__:', ayafileio.__file__)
+              import ayafileio
+              print('ayafileio imported, __file__:', ayafileio.__file__)
             except Exception:
-                traceback.print_exc()
-                sys.exit(1)
-            PY
-            exit 1
-          )
+              traceback.print_exc()
+            raise
+          PY
 
       - name: Install built wheel and run tests (Windows)
         if: runner.os == 'Windows'

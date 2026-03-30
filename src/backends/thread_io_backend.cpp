@@ -1,4 +1,4 @@
-#include "linux_io_backend.hpp"
+#include "thread_io_backend.hpp"
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <pthread.h>
 #include "../globals.hpp"
+#include "./utils/file_mode.hpp"
 #include <thread>
 
 // cached event loop
@@ -22,7 +23,7 @@ static void refresh_loop_cache(PyObject *loop) {
     g_cachedLoopHandle = get_or_create_loop_handle(loop);
 }
 
-LinuxIOBackend::LinuxIOBackend(const std::string &path, const std::string &mode) {
+ThreadIOBackend::ThreadIOBackend(const std::string &path, const std::string &mode) {
     PyObject *loop = PyObject_CallNoArgs(g_get_running_loop);
     if (!loop) throw py::python_error();
     refresh_loop_cache(loop);
@@ -31,18 +32,20 @@ LinuxIOBackend::LinuxIOBackend(const std::string &path, const std::string &mode)
     m_loop_handle   = g_cachedLoopHandle;
 
     int flags = O_RDONLY;
-    bool canRead=false, canWrite=false, appendMode=false;
-    bool plus=mode.find('+')!=std::string::npos;
-    bool hasR=mode.find('r')!=std::string::npos, hasW=mode.find('w')!=std::string::npos;
-    bool hasA=mode.find('a')!=std::string::npos, hasX=mode.find('x')!=std::string::npos;
+    ModeInfo mi;
+    try {
+        mi = parse_mode(mode);
+    } catch (const std::invalid_argument &e) {
+        throw py::value_error(e.what());
+    }
+    bool canRead = mi.canRead;
+    bool canWrite = mi.canWrite;
+    bool appendMode = mi.appendMode;
 
-    if (hasX&&hasW) throw py::value_error("Invalid mode: cannot combine x and w");
-    if (!hasR&&!hasW&&!hasA&&!hasX) throw py::value_error("Invalid mode: missing mode character");
-    if (hasR) { canRead=true; }
-    if (hasW) { canWrite=true; flags = O_WRONLY | O_CREAT | O_TRUNC; }
-    if (hasA) { canWrite=true; appendMode=true; flags = O_WRONLY | O_CREAT | O_APPEND; }
-    if (hasX) { canWrite=true; flags = O_WRONLY | O_CREAT | O_EXCL; }
-    if (plus) { flags = O_RDWR; canRead=true; canWrite=true; }
+    if (mi.hasW) { flags = O_WRONLY | O_CREAT | O_TRUNC; }
+    if (mi.hasA) { flags = O_WRONLY | O_CREAT | O_APPEND; }
+    if (mi.hasX) { flags = O_WRONLY | O_CREAT | O_EXCL; }
+    if (mi.plus) { flags = O_RDWR; }
 
     m_appendMode = appendMode;
 
@@ -71,17 +74,17 @@ LinuxIOBackend::LinuxIOBackend(const std::string &path, const std::string &mode)
         throw py::value_error("worker count must be 0 (auto) or 1-128");
     }
     for (unsigned i = 0; i < num_workers; ++i) {
-        m_workers.emplace_back(&LinuxIOBackend::worker_thread, this);
+        m_workers.emplace_back(&ThreadIOBackend::worker_thread, this);
     }
 }
 
-LinuxIOBackend::~LinuxIOBackend() {
+ThreadIOBackend::~ThreadIOBackend() {
     close_impl();
     Py_XDECREF(m_create_future);
     Py_XDECREF(m_loop);
 }
 
-void LinuxIOBackend::worker_thread() {
+void ThreadIOBackend::worker_thread() {
     while (true) {
         std::function<void()> task;
         {
@@ -95,7 +98,7 @@ void LinuxIOBackend::worker_thread() {
     }
 }
 
-void LinuxIOBackend::enqueue_task(std::function<void()> task) {
+void ThreadIOBackend::enqueue_task(std::function<void()> task) {
     {
         std::lock_guard<std::mutex> lk(m_queueMtx);
         m_taskQueue.push(std::move(task));
@@ -103,7 +106,7 @@ void LinuxIOBackend::enqueue_task(std::function<void()> task) {
     m_cv.notify_one();
 }
 
-PyObject *LinuxIOBackend::read(int64_t size) {
+PyObject *ThreadIOBackend::read(int64_t size) {
     PyObject *future = PyObject_CallNoArgs(m_create_future);
     if (!future) return nullptr;
 
@@ -143,7 +146,7 @@ PyObject *LinuxIOBackend::read(int64_t size) {
     return future;
 }
 
-PyObject *LinuxIOBackend::write(Py_buffer *view) {
+PyObject *ThreadIOBackend::write(Py_buffer *view) {
     size_t size = (size_t)view->len;
     PyObject *future = PyObject_CallNoArgs(m_create_future);
     if (!future) return nullptr;
@@ -190,7 +193,7 @@ PyObject *LinuxIOBackend::write(Py_buffer *view) {
     return future;
 }
 
-PyObject *LinuxIOBackend::seek(int64_t offset, int whence) {
+PyObject *ThreadIOBackend::seek(int64_t offset, int whence) {
     PyObject *future = PyObject_CallNoArgs(m_create_future);
     if (!future) return nullptr;
     {
@@ -214,7 +217,7 @@ PyObject *LinuxIOBackend::seek(int64_t offset, int whence) {
     return future;
 }
 
-PyObject *LinuxIOBackend::flush() {
+PyObject *ThreadIOBackend::flush() {
     PyObject *future = PyObject_CallNoArgs(m_create_future);
     if (!future) return nullptr;
     if (!m_running.load(std::memory_order_relaxed) || m_fd == -1) {
@@ -229,7 +232,7 @@ PyObject *LinuxIOBackend::flush() {
     return future;
 }
 
-PyObject *LinuxIOBackend::close() {
+PyObject *ThreadIOBackend::close() {
     PyObject *future = PyObject_CallNoArgs(m_create_future);
     if (!future) return nullptr;
     close_impl();
@@ -237,7 +240,7 @@ PyObject *LinuxIOBackend::close() {
     return future;
 }
 
-void LinuxIOBackend::close_impl() {
+void ThreadIOBackend::close_impl() {
     bool expected = true;
     if (!m_running.compare_exchange_strong(expected, false)) return;
     {
@@ -254,7 +257,7 @@ void LinuxIOBackend::close_impl() {
     }
 }
 
-void LinuxIOBackend::complete_ok(IORequest *req, size_t bytes) {
+void ThreadIOBackend::complete_ok(IORequest *req, size_t bytes) {
     m_pending.fetch_sub(1, std::memory_order_release);
     PyGILState_STATE gs = PyGILState_Ensure();
 
@@ -273,7 +276,7 @@ void LinuxIOBackend::complete_ok(IORequest *req, size_t bytes) {
     PyGILState_Release(gs);
 }
 
-void LinuxIOBackend::complete_error(IORequest *req, DWORD err) {
+void ThreadIOBackend::complete_error(IORequest *req, DWORD err) {
     m_pending.fetch_sub(1, std::memory_order_release);
     PyGILState_STATE gs = PyGILState_Ensure();
 
@@ -290,7 +293,7 @@ void LinuxIOBackend::complete_error(IORequest *req, DWORD err) {
     PyGILState_Release(gs);
 }
 
-IORequest *LinuxIOBackend::make_req(size_t size, PyObject *future, ReqType type) {
+IORequest *ThreadIOBackend::make_req(size_t size, PyObject *future, ReqType type) {
     auto *req          = new IORequest();
     req->file          = this;
     req->loop_handle   = m_loop_handle;
@@ -304,7 +307,7 @@ IORequest *LinuxIOBackend::make_req(size_t size, PyObject *future, ReqType type)
     return req;
 }
 
-void LinuxIOBackend::complete_error_inline(IORequest *req, DWORD err) {
+void ThreadIOBackend::complete_error_inline(IORequest *req, DWORD err) {
     m_pending.fetch_sub(1, std::memory_order_relaxed);
     PyObject *exc_class = g_OSError;
     PyObject *exc = PyObject_CallFunction(exc_class, "is", (int)err, "I/O operation failed");

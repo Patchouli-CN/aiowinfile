@@ -2,14 +2,14 @@
 #ifdef _WIN32
 #include "backends/windows_io_backend.hpp"
 #else
-#include "backends/linux_io_backend.hpp"
+#include "backends/thread_io_backend.hpp"
 #endif
 
 FileHandle::FileHandle(const std::string &path, const std::string &mode) {
 #ifdef _WIN32
     m_backend = new WindowsIOBackend(path, mode);
 #else
-    m_backend = new LinuxIOBackend(path, mode);
+    m_backend = new ThreadIOBackend(path, mode);
 #endif
 }
 

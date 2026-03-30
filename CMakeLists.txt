@@ -46,16 +46,16 @@ set(SOURCES
 
 # 根据平台添加后端源文件
 if(WIN32)
-    message(STATUS "Building for Windows (IOCP backend)")
+    message(STATUS "Building for Windows (IOCP Backend)")
     list(APPEND SOURCES
         src/backends/windows_io_backend.cpp
         src/handle_pool.cpp
         src/iocp.cpp
     )
 else()
-    message(STATUS "Building for Linux (thread pool backend)")
+    message(STATUS "Building for Linux/MacOS (Thread Pool Backend)")
     list(APPEND SOURCES
-        src/backends/linux_io_backend.cpp
+        src/backends/thread_io_backend.cpp
         src/handle_pool_posix.cpp
     )
     # Linux 需要 pthread

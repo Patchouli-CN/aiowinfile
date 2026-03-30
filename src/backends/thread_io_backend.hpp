@@ -13,10 +13,10 @@
 // §8  Linux IO Backend (using epoll and threads)
 // ════════════════════════════════════════════════════════════════════════════
 
-class LinuxIOBackend : public IOBackendBase {
+class ThreadIOBackend : public IOBackendBase {
 public:
-    LinuxIOBackend(const std::string& path, const std::string& mode);
-    ~LinuxIOBackend() override;
+    ThreadIOBackend(const std::string& path, const std::string& mode);
+    ~ThreadIOBackend() override;
 
     PyObject* read(int64_t size = -1) override;
     PyObject* write(Py_buffer* view) override;

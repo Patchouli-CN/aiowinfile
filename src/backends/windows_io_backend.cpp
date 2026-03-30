@@ -1,5 +1,6 @@
-#define NOMINMAX
+
 #include "windows_io_backend.hpp"
+#include "./utils/file_mode.hpp"
 #include <algorithm>
 
 // cached event loop
@@ -29,18 +30,21 @@ WindowsIOBackend::WindowsIOBackend(const std::string &path, const std::string &m
     { std::lock_guard<std::mutex> lk(g_openFilesMtx); g_openFiles.insert(this); }
 
     DWORD access = 0, disp = OPEN_EXISTING;
-    bool canRead=false, canWrite=false, appendMode=false;
-    bool plus=mode.find('+')!=std::string::npos;
-    bool hasR=mode.find('r')!=std::string::npos, hasW=mode.find('w')!=std::string::npos;
-    bool hasA=mode.find('a')!=std::string::npos, hasX=mode.find('x')!=std::string::npos;
+    ModeInfo mi;
+    try {
+        mi = parse_mode(mode);
+    } catch (const std::invalid_argument &e) {
+        throw py::value_error(e.what());
+    }
+    bool canRead = mi.canRead;
+    bool canWrite = mi.canWrite;
+    bool appendMode = mi.appendMode;
 
-    if (hasX&&hasW) throw py::value_error("Invalid mode: cannot combine x and w");
-    if (!hasR&&!hasW&&!hasA&&!hasX) throw py::value_error("Invalid mode: missing mode character");
-    if (hasR) { canRead=true;  disp=OPEN_EXISTING; }
-    if (hasW) { canWrite=true; disp=CREATE_ALWAYS; }
-    if (hasA) { canWrite=true; appendMode=true; disp=OPEN_ALWAYS; }
-    if (hasX) { canWrite=true; disp=CREATE_NEW; }
-    if (plus) { canRead=true; canWrite=true; }
+    if (mi.hasR) { disp = OPEN_EXISTING; }
+    if (mi.hasW) { disp = CREATE_ALWAYS; }
+    if (mi.hasA) { appendMode = true; disp = OPEN_ALWAYS; }
+    if (mi.hasX) { disp = CREATE_NEW; }
+
     if (canRead)  access |= GENERIC_READ;
     if (canWrite) access |= GENERIC_WRITE;
 

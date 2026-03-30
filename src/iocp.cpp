@@ -1,4 +1,4 @@
-#define NOMINMAX
+
 #include "iocp.hpp"
 #include "io_backend.hpp"
 #include "io_request.hpp"

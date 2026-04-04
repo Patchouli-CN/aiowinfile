@@ -29,7 +29,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install build scikit-build-core nanobind
       
-      # Linux: 使用 cibuildwheel 构建正确的 manylinux wheel
+      # Linux: 使用 cibuildwheel 构建
       - name: Build wheel on Linux
         if: runner.os == 'Linux'
         run: |
@@ -39,8 +39,9 @@ jobs:
           CIBW_ARCHS: "x86_64"
           CIBW_MANYLINUX_X86_64_IMAGE: manylinux2014
           CIBW_BUILD_FRONTEND: "build"
+          CIBW_TEST_SKIP: "*"  # 禁用 cibuildwheel 自带测试，我们手动测
       
-      # Windows/macOS: 保持原样
+      # Windows/macOS: 构建 wheel
       - name: Build wheel on Windows/macOS
         if: runner.os != 'Linux'
         run: |
@@ -52,16 +53,40 @@ jobs:
           echo "=== Built wheels ==="
           ls -la dist/
       
-      - name: Verify wheel contents
+      # ============================================================
+      # 关键步骤：安装 wheel 并运行测试
+      # ============================================================
+      - name: Install wheel and run tests
         shell: bash
         run: |
-          for wheel in dist/*.whl; do
-            echo "Checking $wheel"
-            if command -v unzip &> /dev/null; then
-              unzip -l "$wheel" | grep -E "(_ayafileio|\.so|\.pyd)" || echo "WARNING: No extension found!"
-            fi
-          done
+          # 找到 wheel 文件
+          WHEEL=$(ls dist/*.whl | head -1)
+          echo "Testing wheel: $WHEEL"
+          
+          # 创建虚拟环境
+          python -m venv test_env
+          
+          # 激活虚拟环境（跨平台）
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            source test_env/Scripts/activate
+          else
+            source test_env/bin/activate
+          fi
+          
+          # 安装 wheel
+          pip install "$WHEEL"
+          
+          # 验证导入
+          echo "=== Testing import ==="
+          python -c "import ayafileio; print('✓ Import OK')"
+          
+          # 运行测试
+          echo "=== Running test_base.py ==="
+          python test_base.py
+          
+          echo "=== All tests passed ==="
       
+      # 上传 artifacts（只有测试通过才会执行到这里）
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.os }}

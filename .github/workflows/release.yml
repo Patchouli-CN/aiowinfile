@@ -15,6 +15,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
       fail-fast: false
 
     steps:
@@ -22,7 +23,7 @@ jobs:
       
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: ${{ matrix.python-version }}
       
       - name: Install build dependencies
         run: |
@@ -36,10 +37,11 @@ jobs:
           pip install cibuildwheel
           python -m cibuildwheel --output-dir dist
         env:
+          CIBW_BUILD: "cp${{ matrix.python-version }}-*"
           CIBW_ARCHS: "x86_64"
           CIBW_MANYLINUX_X86_64_IMAGE: manylinux2014
           CIBW_BUILD_FRONTEND: "build"
-          CIBW_TEST_SKIP: "*"  # 禁用 cibuildwheel 自带测试，我们手动测
+          CIBW_TEST_SKIP: "*"
       
       # Windows/macOS: 构建 wheel
       - name: Build wheel on Windows/macOS
@@ -93,11 +95,11 @@ jobs:
             echo "ERROR: ayafileio directory not found in site-packages!"
             echo "Searching for ayafileio anywhere in site-packages:"
             find "$SITE_PKG" -name "*ayafileio*" -type d 2>/dev/null || echo "No ayafileio directories found"
-            find "$SITE_PKG" -name "*.pyd" 2>/dev/null | head -20 || echo "No .pyd files found"
+            find "$SITE_PKG" -name "*.pyd" -o -name "*.so" 2>/dev/null | head -20 || echo "No extension files found"
           fi
           
-          echo "=== DEBUG: All .pyd files in site-packages ==="
-          find "$SITE_PKG" -name "*.pyd" 2>/dev/null | head -20 || echo "No .pyd files found"
+          echo "=== DEBUG: All extension files in site-packages ==="
+          find "$SITE_PKG" -name "*.pyd" -o -name "*.so" 2>/dev/null | head -20 || echo "No extension files found"
           
           # 尝试直接导入 .pyd 文件
           echo "=== DEBUG: Trying to import _ayafileio directly ==="
@@ -118,7 +120,7 @@ jobs:
       # 上传 artifacts（只有测试通过才会执行到这里）
       - uses: actions/upload-artifact@v4
         with:
-          name: wheels-${{ matrix.os }}
+          name: wheels-${{ matrix.os }}-py${{ matrix.python-version }}
           path: dist/*.whl
           retention-days: 7
           if-no-files-found: error

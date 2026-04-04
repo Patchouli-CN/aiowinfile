@@ -10,12 +10,12 @@ on:
 
 jobs:
   build_wheels:
-    name: Build wheels on ${{ matrix.os }} (Python ${{ matrix.python-version }})
+    name: Build wheels on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
+        python-version: ['3.10']  # 只用 3.10 构建 ABI3 wheel
       fail-fast: false
 
     steps:
@@ -56,76 +56,142 @@ jobs:
           echo "=== Built wheels ==="
           ls -la dist/
       
-      # ============================================================
-      # 关键步骤：安装 wheel 并运行测试
-      # ============================================================
-      - name: Install wheel and run tests
+      # 简单测试当前环境（Python 3.10）
+      - name: Quick test on Python ${{ matrix.python-version }}
         shell: bash
         run: |
-          # 找到 wheel 文件：优先匹配当前 Python 版本（如 cp312），否则尝试 abi3，再退回任意第一个 wheel
-          PYTAG=$(python -c "import sys; print(f'cp{sys.version_info.major}{sys.version_info.minor}')")
-          echo "Python tag: $PYTAG"
-          WHEEL=$(ls dist/*${PYTAG}*.whl 2>/dev/null | head -n 1 || true)
+          # 找到 abi3 wheel
+          WHEEL=$(ls dist/*abi3*.whl 2>/dev/null | head -n 1)
           if [ -z "$WHEEL" ]; then
-            WHEEL=$(ls dist/*abi3*.whl 2>/dev/null | head -n 1 || true)
-          fi
-          if [ -z "$WHEEL" ]; then
-            WHEEL=$(ls dist/*.whl 2>/dev/null | head -n 1 || true)
-          fi
-          if [ -z "$WHEEL" ]; then
-            echo "No wheel found in dist/"
-            exit 1
+            WHEEL=$(ls dist/*.whl | head -n 1)
           fi
           echo "Testing wheel: $WHEEL"
-
+          
           # 创建虚拟环境
           python -m venv test_env
-
+          
           # 激活虚拟环境（跨平台）
           if [ "${{ runner.os }}" = "Windows" ]; then
             source test_env/Scripts/activate
           else
             source test_env/bin/activate
           fi
-
+          
           # 安装 wheel
           pip install "$WHEEL"
           
-          # 在安装完 wheel 后，移除仓库顶层路径，确保使用已安装的包进行测试
-          python - <<'PY'
-          import sys
-          if sys.path:
-            try:
-              sys.path.pop(0)
-            except Exception:
-              pass
-          import ayafileio
-          print('Import OK')
-          PY
-
-          echo "=== Running test_base.py (run with repo path removed) ==="
-          python - <<'PY'
-          import sys, runpy
-          if sys.path:
-            try:
-              sys.path.pop(0)
-            except Exception:
-              pass
-          runpy.run_path('test_base.py', run_name='__main__')
-          PY
+          # 测试导入
+          python -c "import ayafileio; print(f'✓ Import successful on Python {__import__(\"sys\").version}')"
       
-      # 上传 artifacts（只有测试通过才会执行到这里）
+      # 上传 artifacts
       - uses: actions/upload-artifact@v4
         with:
-          name: wheels-${{ matrix.os }}-py${{ matrix.python-version }}
+          name: wheels-${{ matrix.os }}
           path: dist/*.whl
           retention-days: 7
           if-no-files-found: error
 
+  # 新增：测试所有 Python 版本的兼容性
+  test_wheels:
+    name: Test ABI3 wheel on Python ${{ matrix.python-version }} (${{ matrix.os }})
+    needs: build_wheels
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
+      fail-fast: false
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      
+      # 下载对应平台的 wheel
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: dist
+      
+      - name: List downloaded wheels
+        shell: bash
+        run: |
+          echo "=== Downloaded wheels for ${{ matrix.os }} ==="
+          ls -la dist/
+      
+      - name: Install and test wheel on Python ${{ matrix.python-version }}
+        shell: bash
+        run: |
+          # 找到 abi3 wheel
+          WHEEL=$(ls dist/*abi3*.whl 2>/dev/null | head -n 1)
+          if [ -z "$WHEEL" ]; then
+            echo "No abi3 wheel found, looking for any wheel..."
+            WHEEL=$(ls dist/*.whl 2>/dev/null | head -n 1)
+          fi
+          
+          if [ -z "$WHEEL" ]; then
+            echo "No wheel found in dist/"
+            ls -la dist/
+            exit 1
+          fi
+          
+          echo "Testing wheel: $WHEEL"
+          echo "Python version: ${{ matrix.python-version }}"
+          
+          # 创建虚拟环境
+          python -m venv test_env
+          
+          # 激活虚拟环境（跨平台）
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            source test_env/Scripts/activate
+          else
+            source test_env/bin/activate
+          fi
+          
+          # 安装 wheel
+          pip install "$WHEEL"
+          
+          # 验证导入
+          echo "=== Testing import ==="
+          python -c "import ayafileio; print(f'✓ Import successful on Python {__import__(\"sys\").version_info[:3]}')"
+          
+          # 如果有测试文件，运行测试
+          if [ -f "test_base.py" ]; then
+            echo "=== Running test_base.py ==="
+            # 确保使用已安装的包，而不是本地源码
+            python - <<'PY'
+            import sys
+            # 移除当前目录，避免导入本地源码
+            if sys.path and ('' in sys.path or '.' in sys.path):
+                sys.path = [p for p in sys.path if p not in ('', '.')]
+            import runpy
+            try:
+                runpy.run_path('test_base.py', run_name='__main__')
+                print('✓ All tests passed')
+            except Exception as e:
+                print(f'✗ Tests failed: {e}')
+                sys.exit(1)
+            PY
+          else
+            echo "No test_base.py found, skipping tests"
+          fi
+          
+          # 显示安装的包信息
+          echo "=== Installed package info ==="
+          pip show ayafileio
+          
+          # 列出安装的文件（调试用）
+          echo "=== Installed files ==="
+          python -c "import ayafileio, os; print('Package location:', os.path.dirname(ayafileio.__file__)); import glob; files = glob.glob(os.path.join(os.path.dirname(ayafileio.__file__), '*')); print('Files:', files)"
+
   publish:
     name: Publish to PyPI
-    needs: build_wheels
+    needs: test_wheels  # 改为依赖 test_wheels，确保所有测试通过后再发布
     runs-on: ubuntu-latest
+    # 只在推送 tag 或手动触发时发布
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     
     steps:
       - uses: actions/download-artifact@v4

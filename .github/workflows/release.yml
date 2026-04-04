@@ -36,11 +36,13 @@ jobs:
           pip install cibuildwheel
           python -m cibuildwheel --output-dir dist
         env:
-          CIBW_BUILD: "cp311-manylinux_x86_64"
+          CIBW_BUILD: "cp310-manylinux_x86_64 cp311-manylinux_x86_64 cp312-manylinux_x86_64 cp313-manylinux_x86_64 cp314-manylinux_x86_64"
           CIBW_ARCHS: "x86_64"
           CIBW_MANYLINUX_X86_64_IMAGE: manylinux2014
           CIBW_BUILD_FRONTEND: "build"
           CIBW_SKIP: "*-win32 *-manylinux_i686 *-musllinux_*"
+          CIBW_TEST_REQUIRES: "pytest"
+          CIBW_TEST_COMMAND: "python test_base.py"
       
       # Windows/macOS: 保持原样
       - name: Build wheel on Windows/macOS
@@ -54,6 +56,7 @@ jobs:
           echo "=== Built wheels ==="
           ls -la dist/
       
+      # 验证 wheel 内容
       - name: Verify wheel contents
         shell: bash
         run: |
@@ -64,6 +67,36 @@ jobs:
             fi
           done
       
+      # 安装并测试 wheel（关键步骤！）
+      - name: Install and test wheel
+        shell: bash
+        run: |
+          # 创建虚拟环境
+          python -m venv test_env
+          
+          # 激活虚拟环境（跨平台）
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            source test_env/Scripts/activate
+          else
+            source test_env/bin/activate
+          fi
+          
+          # 找到并安装 wheel
+          WHEEL=$(ls dist/*.whl | head -1)
+          echo "Testing wheel: $WHEEL"
+          
+          pip install "$WHEEL"
+          
+          # 验证导入
+          echo "=== Testing import ==="
+          python -c "import ayafileio; print('Import OK')"
+          
+          # 运行测试
+          echo "=== Running tests ==="
+          python test_base.py
+        working-directory: ${{ github.workspace }}
+      
+      # 上传 artifacts（只有测试通过才会执行到这里）
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.os }}
@@ -75,6 +108,8 @@ jobs:
     name: Publish to PyPI
     needs: build_wheels
     runs-on: ubuntu-latest
+    # 只有 main 分支的 tag 推送才发布，避免 PR 或普通 push 误发
+    if: startsWith(github.ref, 'refs/tags/v')
     
     steps:
       - uses: actions/download-artifact@v4
@@ -90,6 +125,22 @@ jobs:
           ls -la dist/
           echo "=== Wheel count ==="
           ls -la dist/*.whl 2>/dev/null | wc -l
+      
+      # 最终验证：再次测试所有 wheel（确保跨平台没问题）
+      - name: Final test before publish
+        shell: bash
+        run: |
+          python -m venv final_test_env
+          source final_test_env/bin/activate
+          
+          for wheel in dist/*.whl; do
+            echo "Testing $wheel"
+            pip install "$wheel"
+            python -c "import ayafileio; print('$wheel: OK')"
+            python test_base.py
+            pip uninstall -y ayafileio
+          done
+        working-directory: ${{ github.workspace }}
       
       - name: Publish to PyPI
         env:

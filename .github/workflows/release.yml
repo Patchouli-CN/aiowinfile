@@ -122,9 +122,48 @@ jobs:
           # ============================================================
           # 正式测试
           # ============================================================
-          echo "=== Testing import ==="
-          python -c "import ayafileio; print('✓ Import OK')"
-          
+          echo "=== Testing import (with detailed diagnostics) ==="
+          python - <<'PY'
+          import sys, traceback, importlib.util, importlib.machinery, os
+          try:
+            import ayafileio
+            print('✓ Import OK')
+          except Exception:
+            traceback.print_exc()
+            print('\n--- Diagnostic info ---')
+            print('sys.version:', sys.version)
+            print('sys.path[0]:', sys.path[0])
+            print('site-packages locations:')
+            try:
+              import site
+              print(site.getsitepackages())
+            except Exception:
+              pass
+            print('find_spec ayafileio:', importlib.util.find_spec('ayafileio'))
+            print('find_spec ayafileio._ayafileio:', importlib.util.find_spec('ayafileio._ayafileio'))
+            print('EXTENSION_SUFFIXES:', importlib.machinery.EXTENSION_SUFFIXES)
+            pkg = importlib.util.find_spec('ayafileio')
+            if pkg and pkg.submodule_search_locations:
+              pkg_dir = pkg.submodule_search_locations[0]
+              print('package dir:', pkg_dir)
+              try:
+                for fn in os.listdir(pkg_dir):
+                  print(' -', fn)
+              except Exception as e:
+                print('listdir failed:', e)
+              # 尝试用 ctypes 加载扩展以获得更具体的 DLL 加载错误（仅 Windows 有用）
+              for fn in os.listdir(pkg_dir):
+                if fn.startswith('_ayafileio') and (fn.endswith('.pyd') or fn.endswith('.so')):
+                  full = os.path.join(pkg_dir, fn)
+                  print('Attempt loading via ctypes:', full)
+                  try:
+                    import ctypes
+                    ctypes.CDLL(full)
+                    print('ctypes loaded OK')
+                  except Exception as e:
+                    print('ctypes load failed:', repr(e))
+          PY
+
           echo "=== Running test_base.py ==="
           python test_base.py
           

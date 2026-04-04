@@ -84,9 +84,13 @@ jobs:
           
           # 安装 wheel
           pip install "$WHEEL"
-          
+
+          mv ayafileio _ayafileio_src
+
           # 测试导入
           python -c "import ayafileio; print(f'✓ Import successful on Python {__import__(\"sys\").version}')"
+
+          mv _ayafileio_src ayafileio
           
           # 如果有测试文件，运行测试
           if [ -f "test_base.py" ]; then

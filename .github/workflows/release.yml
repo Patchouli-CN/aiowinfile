@@ -76,11 +76,40 @@ jobs:
           # 安装 wheel
           pip install "$WHEEL"
           
-          # 验证导入
+          # ============================================================
+          # DEBUG: 查看安装后的文件结构
+          # ============================================================
+          echo "=== DEBUG: Python site-packages location ==="
+          python -c "import site; print(site.getsitepackages())"
+          
+          echo "=== DEBUG: ayafileio package contents ==="
+          SITE_PKG=$(python -c "import site; print(site.getsitepackages()[0])")
+          echo "Site packages: $SITE_PKG"
+          
+          if [ -d "$SITE_PKG/ayafileio" ]; then
+            echo "Contents of $SITE_PKG/ayafileio:"
+            ls -la "$SITE_PKG/ayafileio/"
+          else
+            echo "ERROR: ayafileio directory not found in site-packages!"
+            echo "Searching for ayafileio anywhere in site-packages:"
+            find "$SITE_PKG" -name "*ayafileio*" -type d 2>/dev/null || echo "No ayafileio directories found"
+            find "$SITE_PKG" -name "*.pyd" 2>/dev/null | head -20 || echo "No .pyd files found"
+          fi
+          
+          echo "=== DEBUG: All .pyd files in site-packages ==="
+          find "$SITE_PKG" -name "*.pyd" 2>/dev/null | head -20 || echo "No .pyd files found"
+          
+          # 尝试直接导入 .pyd 文件
+          echo "=== DEBUG: Trying to import _ayafileio directly ==="
+          python -c "import sys; print(sys.path)" || true
+          python -c "import _ayafileio" 2>&1 || echo "Cannot import _ayafileio"
+          
+          # ============================================================
+          # 正式测试
+          # ============================================================
           echo "=== Testing import ==="
           python -c "import ayafileio; print('✓ Import OK')"
           
-          # 运行测试
           echo "=== Running test_base.py ==="
           python test_base.py
           

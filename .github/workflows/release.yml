@@ -2,20 +2,18 @@ name: Build and Publish to PyPI
 
 on:
   push:
-    branches:
-      - main
     tags:
       - 'v*'
   workflow_dispatch:
 
 jobs:
   build_wheels:
-    name: Build wheels on ${{ matrix.os }}
+    name: Build wheel on ${{ matrix.os }} (Python ${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ['3.10']  # 只用 3.10 构建 ABI3 wheel
+        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
       fail-fast: false
 
     steps:
@@ -30,47 +28,54 @@ jobs:
           python -m pip install --upgrade pip
           pip install build scikit-build-core nanobind
       
-      # Linux: 使用 cibuildwheel 构建
-      - name: Build wheel on Linux
-        if: runner.os == 'Linux'
-        run: |
-          CP_VERSION=$(echo "${{ matrix.python-version }}" | tr -d '.')
-          export CIBW_BUILD="cp$CP_VERSION-*"
-          export CIBW_ARCHS="x86_64"
-          export CIBW_MANYLINUX_X86_64_IMAGE="manylinux2014"
-          export CIBW_BUILD_FRONTEND="build"
-          export CIBW_TEST_SKIP="*"
-          
-          pip install cibuildwheel
-          python -m cibuildwheel --output-dir dist
-      
-      # Windows/macOS: 构建 wheel
+      # Windows/macOS: 直接构建
       - name: Build wheel on Windows/macOS
         if: runner.os != 'Linux'
         run: |
           python -m build --wheel --outdir dist
       
+      # Linux: 使用 manylinux 镜像确保兼容性
+      - name: Build wheel on Linux
+        if: runner.os == 'Linux'
+        run: |
+          # 获取 Python 版本号（去掉点，如 310）
+          CP_VERSION=$(echo "${{ matrix.python-version }}" | tr -d '.')
+          
+          # 使用 cibuildwheel 在 manylinux 容器中构建
+          pip install cibuildwheel
+          
+          # 配置 cibuildwheel
+          export CIBW_BUILD="cp${CP_VERSION}-*"
+          export CIBW_ARCHS="x86_64"
+          export CIBW_MANYLINUX_X86_64_IMAGE="manylinux2014"
+          export CIBW_BUILD_FRONTEND="build"
+          export CIBW_TEST_SKIP="*"
+          
+          python -m cibuildwheel --output-dir dist
+      
       - name: List built wheels
         shell: bash
         run: |
-          echo "=== Built wheels ==="
+          echo "=== Built wheels for Python ${{ matrix.python-version }} on ${{ matrix.os }} ==="
           ls -la dist/
       
-      # 简单测试当前环境（Python 3.10）
-      - name: Quick test on Python ${{ matrix.python-version }}
+      # 测试当前 wheel
+      - name: Test wheel
         shell: bash
         run: |
-          # 找到 abi3 wheel
-          WHEEL=$(ls dist/*abi3*.whl 2>/dev/null | head -n 1)
+          # 找到 wheel 文件
+          WHEEL=$(ls dist/*.whl 2>/dev/null | head -n 1)
           if [ -z "$WHEEL" ]; then
-            WHEEL=$(ls dist/*.whl | head -n 1)
+            echo "No wheel found!"
+            exit 1
           fi
+          
           echo "Testing wheel: $WHEEL"
           
           # 创建虚拟环境
           python -m venv test_env
           
-          # 激活虚拟环境（跨平台）
+          # 激活虚拟环境
           if [ "${{ runner.os }}" = "Windows" ]; then
             source test_env/Scripts/activate
           else
@@ -82,116 +87,26 @@ jobs:
           
           # 测试导入
           python -c "import ayafileio; print(f'✓ Import successful on Python {__import__(\"sys\").version}')"
+          
+          # 如果有测试文件，运行测试
+          if [ -f "test_base.py" ]; then
+            python test_base.py
+          fi
       
-      # 上传 artifacts
+      # 上传 wheel 作为 artifact
       - uses: actions/upload-artifact@v4
         with:
-          name: wheels-${{ matrix.os }}
+          name: wheels-${{ matrix.os }}-py${{ matrix.python-version }}
           path: dist/*.whl
           retention-days: 7
           if-no-files-found: error
 
-  # 新增：测试所有 Python 版本的兼容性
-  test_wheels:
-    name: Test ABI3 wheel on Python ${{ matrix.python-version }} (${{ matrix.os }})
-    needs: build_wheels
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
-      fail-fast: false
-    
-    steps:
-      - uses: actions/checkout@v4
-      
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-      
-      # 下载对应平台的 wheel
-      - uses: actions/download-artifact@v4
-        with:
-          name: wheels-${{ matrix.os }}
-          path: dist
-      
-      - name: List downloaded wheels
-        shell: bash
-        run: |
-          echo "=== Downloaded wheels for ${{ matrix.os }} ==="
-          ls -la dist/
-      
-      - name: Install and test wheel on Python ${{ matrix.python-version }}
-        shell: bash
-        run: |
-          # 找到 abi3 wheel
-          WHEEL=$(ls dist/*abi3*.whl 2>/dev/null | head -n 1)
-          if [ -z "$WHEEL" ]; then
-            echo "No abi3 wheel found, looking for any wheel..."
-            WHEEL=$(ls dist/*.whl 2>/dev/null | head -n 1)
-          fi
-          
-          if [ -z "$WHEEL" ]; then
-            echo "No wheel found in dist/"
-            ls -la dist/
-            exit 1
-          fi
-          
-          echo "Testing wheel: $WHEEL"
-          echo "Python version: ${{ matrix.python-version }}"
-          
-          # 创建虚拟环境
-          python -m venv test_env
-          
-          # 激活虚拟环境（跨平台）
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            source test_env/Scripts/activate
-          else
-            source test_env/bin/activate
-          fi
-          
-          # 安装 wheel
-          pip install "$WHEEL"
-          
-          # 验证导入
-          echo "=== Testing import ==="
-          python -c "import ayafileio; print(f'✓ Import successful on Python {__import__(\"sys\").version_info[:3]}')"
-          
-          # 如果有测试文件，运行测试
-          if [ -f "test_base.py" ]; then
-            echo "=== Running test_base.py ==="
-            # 确保使用已安装的包，而不是本地源码
-            python - <<'PY'
-            import sys
-            # 移除当前目录，避免导入本地源码
-            if sys.path and ('' in sys.path or '.' in sys.path):
-                sys.path = [p for p in sys.path if p not in ('', '.')]
-            import runpy
-            try:
-                runpy.run_path('test_base.py', run_name='__main__')
-                print('✓ All tests passed')
-            except Exception as e:
-                print(f'✗ Tests failed: {e}')
-                sys.exit(1)
-            PY
-          else
-            echo "No test_base.py found, skipping tests"
-          fi
-          
-          # 显示安装的包信息
-          echo "=== Installed package info ==="
-          pip show ayafileio
-          
-          # 列出安装的文件（调试用）
-          echo "=== Installed files ==="
-          python -c "import ayafileio, os; print('Package location:', os.path.dirname(ayafileio.__file__)); import glob; files = glob.glob(os.path.join(os.path.dirname(ayafileio.__file__), '*')); print('Files:', files)"
-
   publish:
     name: Publish to PyPI
-    needs: test_wheels  # 改为依赖 test_wheels，确保所有测试通过后再发布
+    needs: build_wheels
     runs-on: ubuntu-latest
-    # 只在推送 tag 或手动触发时发布
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    # 只在推送 tag 时发布
+    if: startsWith(github.ref, 'refs/tags/v')
     
     steps:
       - uses: actions/download-artifact@v4
@@ -199,13 +114,13 @@ jobs:
           pattern: wheels-*
           path: wheels
         
-      - name: Collect and verify wheels
+      - name: Collect all wheels
         shell: bash
         run: |
           # 创建 dist 目录
           mkdir -p dist
           
-          # 递归查找所有 .whl 文件并复制到 dist
+          # 查找并复制所有 wheel 文件
           echo "=== Searching for wheel files ==="
           find wheels -name "*.whl" -type f
           
@@ -215,16 +130,16 @@ jobs:
           ls -la dist/
           
           echo "=== Wheel count ==="
-          ls -la dist/*.whl 2>/dev/null | wc -l
+          ls dist/*.whl 2>/dev/null | wc -l
           
-          # 验证所有 wheel 文件是否完整
+          # 验证 wheel 文件
           echo "=== Verifying wheels ==="
           for wheel in dist/*.whl; do
-            echo "Verifying: $wheel"
+            echo "Verifying: $(basename $wheel)"
             if unzip -t "$wheel" > /dev/null 2>&1; then
-              echo "✓ $wheel is valid"
+              echo "  ✓ Valid"
             else
-              echo "✗ $wheel is corrupted"
+              echo "  ✗ Corrupted"
               exit 1
             fi
           done

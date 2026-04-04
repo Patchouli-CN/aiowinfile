@@ -7,7 +7,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "ayafileio"
-version = "0.1.7.post2"
+version = "0.1.8"  # 升级版本号
 description = "Cross-platform async file API for Python. Blazing fast like Shameimaru Aya."
 readme = "README.md"
 license = {text = "MIT"}
@@ -44,8 +44,10 @@ cmake.args = [
     "-DCMAKE_BUILD_TYPE=Release",
 ]
 
-[tool.scikit-build.wheel]
-py-api = "cp310"
+# 关键：删除或注释掉 [tool.scikit-build.wheel] 部分
+# 让系统为每个 Python 版本生成原生 wheel
+# [tool.scikit-build.wheel]
+# py-api = "cp310"
 
 [tool.setuptools]
 packages = ["ayafileio"]

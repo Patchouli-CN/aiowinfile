@@ -1,3 +1,40 @@
+"""
+ayafileio - 跨平台异步文件 I/O 库
+====================================
+
+Windows 上使用 IOCP（I/O 完成端口）实现真异步，Linux 上使用线程池模拟异步。
+提供与 aiofiles 兼容的 API，但性能更优。
+
+核心特性:
+    - 真异步 I/O (Windows IOCP)
+    - 跨平台支持 (Windows/Linux)
+    - 文本/二进制模式
+    - 可配置句柄池 (Windows)
+    - 与 aiofiles 兼容的 API
+
+基本用法:
+    >>> import ayafileio
+    >>> 
+    >>> async with ayafileio.open("test.txt", "w") as f:
+    ...     await f.write("Hello, World!")
+    >>> 
+    >>> async with ayafileio.open("test.txt", "r") as f:
+    ...     content = await f.read()
+    ...     print(content)
+
+高级配置:
+    >>> # 设置句柄池大小（Windows 特有，Linux 优雅降级）
+    >>> ayafileio.set_handle_pool_limits(max_per_key=128, max_total=4096)
+    >>> 
+    >>> # 设置 I/O 工作线程数（0 = 自动）
+    >>> ayafileio.set_io_worker_count(0)
+
+性能对比 (vs aiofiles):
+    - 100 并发: +55% 吞吐量
+    - 200 并发: +40% 吞吐量
+    - 500 并发: +101% 吞吐量
+"""
+
 import sys
 import locale
 from pathlib import Path

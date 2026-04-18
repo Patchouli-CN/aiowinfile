@@ -41,27 +41,23 @@ jobs:
         run: |
           python -m build --wheel --outdir dist
       
-      # Linux: 使用 cibuildwheel + manylinux 镜像构建
+      # Linux: 使用 cibuildwheel + manylinux 镜像构建（只构建 manylinux，跳过 musllinux）
       - name: Build wheel on Linux
         if: runner.os == 'Linux'
         run: |
           CP_VERSION=$(echo "${{ matrix.python-version }}" | tr -d '.')
           pip install cibuildwheel
 
-          export CIBW_BUILD="cp${CP_VERSION}-*"
+          export CIBW_BUILD="cp${CP_VERSION}-manylinux_*"
+          export CIBW_SKIP="*-musllinux_*"
           export CIBW_ARCHS="x86_64"
           export CIBW_MANYLINUX_X86_64_IMAGE="manylinux_2_28"
-          export CIBW_MUSLLINUX_X86_64_IMAGE="musllinux_1_2"
           export CIBW_BUILD_FRONTEND="build"
           export CIBW_TEST_SKIP="*"
           
           # manylinux: 启用 io_uring，安装 liburing-devel
           export CIBW_ENVIRONMENT="ENABLE_IO_URING=ON"
-          export CIBW_BEFORE_ALL_MANYLINUX_X86_64="yum install -y liburing-devel"
-          
-          # musllinux: 禁用 io_uring，不安装任何额外包
-          export CIBW_ENVIRONMENT_MUSLLINUX_X86_64="ENABLE_IO_URING=OFF"
-          # 不需要设置 CIBW_BEFORE_ALL_MUSLLINUX_X86_64（留空即可）
+          export CIBW_BEFORE_ALL="yum install -y liburing-devel"
           
           python -m cibuildwheel --output-dir dist
       

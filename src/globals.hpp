@@ -25,6 +25,7 @@ extern PyObject *g_FileNotFoundError;
 extern PyObject *g_PermissionError;
 extern PyObject *g_ValueError;
 extern PyObject *g_KeyboardInterrupt;
+extern PyObject *g_FileExistsError;
 extern PyObject *g_get_running_loop;
 
 extern PyObject *g_str_set_result;
@@ -45,6 +46,7 @@ static inline PyObject *map_win_error(DWORD err) {
     switch (err) {
         case ERROR_FILE_NOT_FOUND:
         case ERROR_PATH_NOT_FOUND:    return g_FileNotFoundError;
+        case ERROR_FILE_EXISTS:       return g_FileExistsError;
         case ERROR_ACCESS_DENIED:
         case ERROR_WRITE_PROTECT:
         case ERROR_SHARING_VIOLATION: return g_PermissionError;
@@ -52,6 +54,6 @@ static inline PyObject *map_win_error(DWORD err) {
     }
 }
 
-[[noreturn]] void throw_os_error(DWORD err, const char *msg,
+[[noreturn]] void win_throw_os_error(DWORD err, const char *msg,
                                   const char *filename = nullptr);
 #endif

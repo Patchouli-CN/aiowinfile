@@ -209,6 +209,10 @@ class AsyncFile:
             self._encoding = None
 
         # ── 规范化传给 C++ 的模式（始终二进制）────────────────────────────
+        valid_chars = set("rwaxbt+")
+        if any(c not in valid_chars for c in mode):
+            raise ValueError(f"Invalid mode: '{mode}'")
+        
         clean = mode.replace("t", "")
         if "b" not in clean:
             has_plus = "+" in clean
@@ -242,6 +246,8 @@ class AsyncFile:
     # ── read ──────────────────────────────────────────────────────────────────
 
     async def read(self, size: int = -1) -> str | bytes:
+        if self._closed:
+            raise ValueError("I/O operation on closed file.")
         data: bytes = await self._impl.read(size)
         if not data:
             return "" if self._is_text else b""
@@ -287,6 +293,9 @@ class AsyncFile:
     # ── write ─────────────────────────────────────────────────────────────────
 
     async def write(self, data: str | bytes | bytearray | memoryview) -> int:
+        if self._closed:
+            raise ValueError("I/O operation on closed file.")
+    
         if self._is_text:
             if not isinstance(data, str):
                 raise TypeError("Text mode requires str input.")
@@ -301,9 +310,13 @@ class AsyncFile:
     # ── seek / flush / close ──────────────────────────────────────────────────
 
     async def seek(self, offset: int, whence: int = 0) -> int:
+        if self._closed:
+            raise ValueError("I/O operation on closed file.")
         return await self._impl.seek(offset, whence)
 
     async def flush(self) -> None:
+        if self._closed:
+            raise ValueError("I/O operation on closed file.")
         await self._impl.flush()
 
     async def close(self) -> None:

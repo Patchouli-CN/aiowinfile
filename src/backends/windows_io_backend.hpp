@@ -40,4 +40,15 @@ private:
 
     IORequest* make_req(size_t size, PyObject* future, ReqType type) override;
     void complete_error_inline(IORequest* req, DWORD err) override;
+
+    PyObject* check_closed_or_raise() {
+        if (!m_running.load(std::memory_order_relaxed) || m_handle == INVALID_HANDLE_VALUE) {
+            PyObject *future = PyObject_CallNoArgs(m_create_future);
+            if (future) {
+                resolve_exc(future, g_ValueError, 0, "I/O operation on closed file.");
+            }
+            return future;
+        }
+        return nullptr;
+    }
 };

@@ -62,10 +62,10 @@ WindowsIOBackend::WindowsIOBackend(const std::string &path, const std::string &m
             FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
             NULL, disp, FILE_FLAG_OVERLAPPED, NULL);
         if (m_handle == INVALID_HANDLE_VALUE)
-            throw_os_error(GetLastError(), "Failed to open file", path.c_str());
+            win_throw_os_error(GetLastError(), "Failed to open file", path.c_str());
         if (!CreateIoCompletionPort(m_handle, g_iocp, (ULONG_PTR)this, 0)) {
             CloseHandle(m_handle);
-            throw_os_error(GetLastError(), "Failed to associate file to IOCP");
+            win_throw_os_error(GetLastError(), "Failed to associate file to IOCP");
         }
         // Suppress IOCP packets when I/O completes synchronously (data in cache).
         // Allows inline future resolution without cross-thread wakeup.
@@ -79,10 +79,10 @@ WindowsIOBackend::WindowsIOBackend(const std::string &path, const std::string &m
                 FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
                 NULL, disp, FILE_FLAG_OVERLAPPED, NULL);
             if (m_handle == INVALID_HANDLE_VALUE)
-                throw_os_error(GetLastError(), "Failed to open file", path.c_str());
+                win_throw_os_error(GetLastError(), "Failed to open file", path.c_str());
             if (!CreateIoCompletionPort(m_handle, g_iocp, (ULONG_PTR)this, 0)) {
                 CloseHandle(m_handle);
-                throw_os_error(GetLastError(), "Failed to associate file to IOCP");
+                win_throw_os_error(GetLastError(), "Failed to associate file to IOCP");
             }
             SetFileCompletionNotificationModes(m_handle,
                 FILE_SKIP_COMPLETION_PORT_ON_SUCCESS | FILE_SKIP_SET_EVENT_ON_HANDLE);
@@ -106,7 +106,10 @@ WindowsIOBackend::~WindowsIOBackend() {
 }
 
 PyObject *WindowsIOBackend::read(int64_t size) {
-    PyObject *future = PyObject_CallNoArgs(m_create_future);
+    PyObject *future = check_closed_or_raise();
+    if (future) return future;  // 已关闭，直接返回带异常的 future
+
+    future = PyObject_CallNoArgs(m_create_future);
     if (!future) return nullptr;
 
     if (g_ctrlcTriggered.load(std::memory_order_relaxed) ||
@@ -155,8 +158,11 @@ PyObject *WindowsIOBackend::read(int64_t size) {
 }
 
 PyObject *WindowsIOBackend::write(Py_buffer *view) {
+    PyObject *future = check_closed_or_raise();
+    if (future) return future;  // 已关闭，直接返回带异常的 future
+
     size_t size = (size_t)view->len;
-    PyObject *future = PyObject_CallNoArgs(m_create_future);
+    future = PyObject_CallNoArgs(m_create_future);
     if (!future) return nullptr;
 
     if (g_ctrlcTriggered.load(std::memory_order_relaxed) ||
@@ -211,7 +217,10 @@ PyObject *WindowsIOBackend::write(Py_buffer *view) {
 }
 
 PyObject *WindowsIOBackend::seek(int64_t offset, int whence) {
-    PyObject *future = PyObject_CallNoArgs(m_create_future);
+    PyObject *future = check_closed_or_raise();
+    if (future) return future;  // 已关闭，直接返回带异常的 future
+
+    future = PyObject_CallNoArgs(m_create_future);
     if (!future) return nullptr;
     {
         std::lock_guard<std::mutex> lk(m_posMtx);
@@ -235,12 +244,12 @@ PyObject *WindowsIOBackend::seek(int64_t offset, int whence) {
 }
 
 PyObject *WindowsIOBackend::flush() {
-    PyObject *future = PyObject_CallNoArgs(m_create_future);
+    PyObject *future = check_closed_or_raise();
+    if (future) return future;  // 已关闭，直接返回带异常的 future
+
+    future = PyObject_CallNoArgs(m_create_future);
     if (!future) return nullptr;
-    if (!m_running.load(std::memory_order_relaxed) || m_handle==INVALID_HANDLE_VALUE) {
-        resolve_exc(future, g_OSError, 0, "flush on closed file");
-        return future;
-    }
+
     if (!FlushFileBuffers(m_handle)) {
         resolve_exc(future, g_OSError, GetLastError(), "FlushFileBuffers failed");
         return future;

@@ -2,6 +2,7 @@
 
 PyObject *g_OSError           = nullptr;
 PyObject *g_FileNotFoundError = nullptr;
+PyObject *g_FileExistsError   = nullptr;
 PyObject *g_PermissionError   = nullptr;
 PyObject *g_ValueError        = nullptr;
 PyObject *g_KeyboardInterrupt = nullptr;
@@ -27,6 +28,7 @@ void cache_globals() {
     auto *builtins = PyImport_ImportModule("builtins");
     g_OSError           = PyObject_GetAttrString(builtins, "OSError");
     g_FileNotFoundError = PyObject_GetAttrString(builtins, "FileNotFoundError");
+    g_FileExistsError   = PyObject_GetAttrString(builtins, "FileExistsError");
     g_PermissionError   = PyObject_GetAttrString(builtins, "PermissionError");
     g_ValueError        = PyObject_GetAttrString(builtins, "ValueError");
     g_KeyboardInterrupt = PyObject_GetAttrString(builtins, "KeyboardInterrupt");
@@ -43,11 +45,48 @@ void cache_globals() {
 }
 
 #ifdef _WIN32
-[[noreturn]] void throw_os_error(DWORD err, const char *msg, const char *filename) {
+[[noreturn]] void win_throw_os_error(DWORD err, const char *msg, const char *filename) {
     PyObject *cls = map_win_error(err);
+    
+    // 根据错误类型生成友好的错误信息
+    const char *error_msg = msg;
+    char custom_msg[256];
+    
+    switch (err) {
+        case ERROR_FILE_NOT_FOUND:
+        case ERROR_PATH_NOT_FOUND:
+            if (filename) {
+                snprintf(custom_msg, sizeof(custom_msg), 
+                         "[Errno %d] No such file or directory: '%s'", err, filename);
+                error_msg = custom_msg;
+            }
+            break;
+        case ERROR_FILE_EXISTS:
+            if (filename) {
+                snprintf(custom_msg, sizeof(custom_msg), 
+                         "File exists: '%s'", err, filename);
+                error_msg = custom_msg;
+            }
+            break;
+        case ERROR_ACCESS_DENIED:
+            if (filename) {
+                snprintf(custom_msg, sizeof(custom_msg), 
+                         "[Errno %d] Permission denied: '%s'", err, filename);
+                error_msg = custom_msg;
+            }
+            break;
+        default:
+            if (filename) {
+                snprintf(custom_msg, sizeof(custom_msg), 
+                         "[Errno %d] %s: '%s'", err, msg, filename);
+                error_msg = custom_msg;
+            }
+            break;
+    }
+    
     PyObject *exc = filename
-        ? PyObject_CallFunction(cls, "iss", (int)err, msg, filename)
-        : PyObject_CallFunction(cls, "is",  (int)err, msg);
+        ? PyObject_CallFunction(cls, "is", (int)err, error_msg)
+        : PyObject_CallFunction(cls, "is", (int)err, msg);
     PyErr_SetObject((PyObject *)Py_TYPE(exc), exc);
     Py_DECREF(exc);
     throw py::python_error();

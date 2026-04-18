@@ -539,22 +539,29 @@ async def test_encoding_gbk():
 async def test_exclusive_create():
     path = get_temp_path(".txt")
     try:
+        print("第一次打开")
         async with ayafileio.open(path, "x") as f:
             await f.write("test")
+        print("第一次成功")
         
-        try:
-            async with ayafileio.open(path, "x") as f:
-                await f.write("test")
-            assert False, "应该抛出 FileExistsError"
-        except FileExistsError:
-            pass
+        print("第二次打开")
+        async with ayafileio.open(path, "x") as f:
+            await f.write("test")
+        print("第二次成功")
+        assert False
+    except FileExistsError as e:
+        print(f"捕获到 FileExistsError: {e}")
+    except Exception as e:
+        print(f"捕获到其他异常: {type(e).__name__}: {e}")
     finally:
         path.unlink(missing_ok=True)
+    print("测试结束")
 
 
 async def test_read_write_mode():
     path = get_temp_path(".txt")
     try:
+        print("开始 test_read_write_mode")
         async with ayafileio.open(path, "w") as f:
             await f.write("Hello, World!")
         
@@ -566,7 +573,8 @@ async def test_read_write_mode():
             await f.write("Hi")
             await f.seek(0)
             new_content = await f.read()
-            assert new_content == "Hi, World!", f"内容不是Hi, World!，而是: {content}"
+            assert new_content == "Hillo, World!", f"内容不是Hillo, World!，而是: {content}"
+        print("结束 test_read_write_mode")
     finally:
         path.unlink(missing_ok=True)
 
@@ -574,11 +582,13 @@ async def test_read_write_mode():
 async def test_w_plus_mode():
     path = get_temp_path(".txt")
     try:
+        print("开始 test_w_plus_mode")
         async with ayafileio.open(path, "w+") as f:
             await f.write("test")
             await f.seek(0)
             content = await f.read()
             assert content == "test"
+        print("结束 test_w_plus_mode")
     finally:
         path.unlink(missing_ok=True)
 

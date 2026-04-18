@@ -47,8 +47,6 @@ ThreadIOBackend::ThreadIOBackend(const std::string &path, const std::string &mod
     } catch (const std::invalid_argument &e) {
         throw py::value_error(e.what());
     }
-    bool canRead = mi.canRead;
-    bool canWrite = mi.canWrite;
     bool appendMode = mi.appendMode;
 
     if (mi.hasW) { flags = O_WRONLY | O_CREAT | O_TRUNC; }

@@ -163,6 +163,7 @@ void IOUringBackend::reaper_loop_entry(UringInstance* inst) {
            (void*)inst, inst->ring.ring_fd, inst->event_fd);
     
     struct io_uring_cqe* cqe = nullptr;
+    int idle_count = 0;
     
     while (!inst->reaper_stop.load(std::memory_order_acquire)) {
         int ret = io_uring_wait_cqe(&inst->ring, &cqe);
@@ -172,7 +173,7 @@ void IOUringBackend::reaper_loop_entry(UringInstance* inst) {
         }
         
         if (ret < 0) {
-            UR_LOG("reaper_loop: io_uring_wait_cqe error ret=%d, exiting", ret);
+            UR_LOG("reaper_loop: io_uring_wait_cqe error ret=%d, errno=%d, exiting", ret, errno);
             break;
         }
         
@@ -191,14 +192,18 @@ void IOUringBackend::reaper_loop_entry(UringInstance* inst) {
                     file->complete_error(req, static_cast<DWORD>(-cqe->res));
                 }
             } else {
-                // eventfd 唤醒，重新提交 poll
                 UR_LOG("reaper got eventfd wakeup");
                 if (!inst->reaper_stop.load(std::memory_order_acquire)) {
                     struct io_uring_sqe* sqe = io_uring_get_sqe(&inst->ring);
                     if (sqe) {
                         io_uring_prep_poll_add(sqe, inst->event_fd, POLLIN);
                         io_uring_sqe_set_data(sqe, nullptr);
-                        io_uring_submit(&inst->ring);
+                        ret = io_uring_submit(&inst->ring);
+                        if (ret < 0) {
+                            UR_LOG("reaper_loop: failed to resubmit eventfd poll, ret=%d", ret);
+                        }
+                    } else {
+                        UR_LOG("reaper_loop: failed to get sqe for eventfd poll");
                     }
                 }
             }
@@ -207,6 +212,12 @@ void IOUringBackend::reaper_loop_entry(UringInstance* inst) {
         
         if (count > 0) {
             io_uring_cq_advance(&inst->ring, count);
+            UR_LOG("reaper processed %u cqes", count);
+        } else {
+            idle_count++;
+            if (idle_count % 1000 == 0) {
+                UR_LOG("reaper idle, count=%d", idle_count);
+            }
         }
     }
     
@@ -227,7 +238,8 @@ void IOUringBackend::submit_io(IORequest* req, int op, int fd,
     
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_uring->ring);
     if (!sqe) {
-        UR_LOG("submit_io: get_sqe failed (queue full), this=%p, fd=%d", (void*)this, fd);
+        UR_LOG("submit_io: get_sqe failed (queue full), this=%p, fd=%d, pending=%ld", 
+               (void*)this, fd, m_pending.load());
         complete_error(req, EBUSY);
         return;
     }

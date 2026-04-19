@@ -487,13 +487,10 @@ void IOUringBackend::close_impl() {
     UR_LOG("close_impl start: this=%p, fd=%d, pending=%ld", 
            (void*)this, m_fd, m_pending.load());
     
-    // 1. 停止 reaper 线程
-    if (m_uring) {
-        UR_LOG("close_impl: stopping reaper for uring=%p", (void*)m_uring.get());
-        m_uring->stop_reaper();
-    }
+    // 注意：不要在这里调用 m_uring->stop_reaper()！
+    // reaper 线程属于共享的 UringInstance，应该只在 cleanup 时停止
     
-    // 2. 等待 pending I/O 完成
+    // 等待 pending I/O 完成
     int elapsed = 0;
     int wait_time = 1;
     while (elapsed < static_cast<int>(m_cached_close_timeout_ms) && 
@@ -512,13 +509,13 @@ void IOUringBackend::close_impl() {
                m_pending.load());
     }
     
-    // 3. 释放 io_uring 实例引用（实例保留在管理器中供复用）
+    // 释放 io_uring 实例引用（实例保留在管理器中供复用）
     if (m_uring) {
         UR_LOG("close_impl: releasing uring instance %p", (void*)m_uring.get());
         m_uring.reset();
     }
     
-    // 4. 关闭文件描述符
+    // 关闭文件描述符
     if (m_fd != -1) {
         UR_LOG("close_impl: closing fd=%d", m_fd);
         ::close(m_fd);

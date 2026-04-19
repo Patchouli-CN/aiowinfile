@@ -31,9 +31,10 @@ struct UringInstance {
     struct io_uring ring;
     std::thread reaper_thread;
     std::atomic<bool> reaper_stop{false};
-    std::atomic<bool> reaper_started{false};  
-    std::mutex start_mutex;               
-    PyObject* loop = nullptr; 
+    std::atomic<bool> reaper_started{false};
+    std::atomic<bool> running{true};      // 标记实例是否可用
+    std::mutex start_mutex;
+    PyObject* loop = nullptr;
     int event_fd = -1;
     
     unsigned queue_depth = 256;
@@ -43,17 +44,15 @@ struct UringInstance {
     using ReaperFunc = void (*)(UringInstance*);
     ReaperFunc reaper_func = nullptr;
     
-    // 简单的构造函数
     UringInstance() = default;
     
-    // 禁止拷贝
     UringInstance(const UringInstance&) = delete;
     UringInstance& operator=(const UringInstance&) = delete;
     
-    // 析构函数：只清理系统资源，Python 对象由 cleanup 统一处理
     ~UringInstance() {
         UR_LOG("UringInstance destructor: this=%p", (void*)this);
         
+        running.store(false, std::memory_order_release);
         reaper_stop.store(true, std::memory_order_release);
         
         // 唤醒 reaper
@@ -79,6 +78,7 @@ struct UringInstance {
     }
     
     void stop_reaper() {
+        running.store(false, std::memory_order_release);
         reaper_stop.store(true, std::memory_order_release);
         if (event_fd != -1) {
             uint64_t val = 1;
@@ -101,7 +101,6 @@ public:
         return mgr;
     }
     
-    // 获取或创建与事件循环关联的 io_uring 实例
     std::shared_ptr<UringInstance> acquire(PyObject* loop,
                                             UringInstance::ReaperFunc reaper_func,
                                             unsigned queue_depth = 256,
@@ -115,10 +114,11 @@ public:
         auto it = m_instances.find(key);
         if (it != m_instances.end()) {
             auto inst = it->second.lock();
-            if (inst) {
+            if (inst && inst->running.load(std::memory_order_acquire)) {
                 UR_LOG("UringManager::acquire: found existing instance=%p", (void*)inst.get());
                 return inst;
             }
+            UR_LOG("UringManager::acquire: existing instance expired, removing");
             m_instances.erase(it);
         }
         
@@ -128,6 +128,7 @@ public:
         inst->sqpoll = sqpoll;
         inst->loop = loop;
         inst->reaper_func = reaper_func;
+        inst->running.store(true, std::memory_order_release);
         
         if (!setup_instance(inst.get())) {
             UR_LOG("UringManager::acquire: setup_instance failed");
@@ -136,7 +137,6 @@ public:
         
         m_instances[key] = inst;
         
-        // 同时加入全局追踪（用于 cleanup）
         {
             std::lock_guard<std::mutex> lk2(g_uring_instances_mtx);
             g_uring_instances[key] = inst;
@@ -146,9 +146,8 @@ public:
         return inst;
     }
     
-    // 启动 reaper 线程（由 IOUringBackend 调用）
     void start_reaper(std::shared_ptr<UringInstance> inst) {
-        std::lock_guard<std::mutex> lk(inst->start_mutex);  // 需要添加这个 mutex
+        std::lock_guard<std::mutex> lk(inst->start_mutex);
         if (inst->reaper_started.exchange(true)) {
             UR_LOG("UringManager::start_reaper: reaper already started for inst=%p", (void*)inst.get());
             return;
@@ -157,7 +156,6 @@ public:
         UR_LOG("UringManager::start_reaper: started reaper for inst=%p", (void*)inst.get());
     }
     
-    // 清理所有实例（模块退出时调用）
     void cleanup_all() {
         std::lock_guard<std::mutex> lk(m_mutex);
         UR_LOG("UringManager::cleanup_all: cleaning %zu instances", m_instances.size());
@@ -166,7 +164,6 @@ public:
             if (auto inst = pair.second.lock()) {
                 UR_LOG("UringManager::cleanup_all: stopping instance=%p", (void*)inst.get());
                 inst->stop_reaper();
-                // 释放 Python 对象引用
                 if (inst->loop) {
                     PyGILState_STATE gstate = PyGILState_Ensure();
                     Py_DECREF(inst->loop);
@@ -177,7 +174,6 @@ public:
         }
         m_instances.clear();
         
-        // 同时清理全局追踪
         {
             std::lock_guard<std::mutex> lk2(g_uring_instances_mtx);
             g_uring_instances.clear();
@@ -224,7 +220,6 @@ private:
             return false;
         }
         
-        // 提交 eventfd poll 请求
         struct io_uring_sqe* sqe = io_uring_get_sqe(&inst->ring);
         if (sqe) {
             io_uring_prep_poll_add(sqe, inst->event_fd, POLLIN);
@@ -241,16 +236,11 @@ private:
     std::unordered_map<void*, std::weak_ptr<UringInstance>> m_instances;
 };
 
-extern std::atomic<bool> g_uring_running;
-extern std::mutex g_uring_instances_mtx;
-extern std::unordered_map<void*, std::weak_ptr<UringInstance>> g_uring_instances;
-
 // 便捷函数
 inline UringManager& uring_manager() {
     return UringManager::instance();
 }
 
-// 模块级 cleanup 函数
 inline void uring_cleanup_all() {
     UringManager::instance().cleanup_all();
 }

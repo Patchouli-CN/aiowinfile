@@ -224,10 +224,6 @@ void IOUringBackend::reaper_loop() {
     struct io_uring_sqe* sqe;
     struct io_uring_cqe* cqe;
     
-    // 性能优化：批量处理完成的 I/O 请求
-    constexpr int BATCH_SIZE = 32;
-    struct io_uring_cqe* cqes[BATCH_SIZE];
-    
     // 将 eventfd 添加到 io_uring 中（用于唤醒）
     sqe = io_uring_get_sqe(&m_ring);
     if (sqe) {
@@ -237,14 +233,14 @@ void IOUringBackend::reaper_loop() {
     }
     
     while (!m_reaper_stop.load(std::memory_order_relaxed)) {
-        // 性能优化：使用 io_uring_wait_cqe 批量获取
+        // 等待完成事件
         int ret = io_uring_wait_cqe(&m_ring, &cqe);
         if (ret < 0) {
             if (errno == EINTR) continue;
             break;
         }
         
-        // 批量处理完成事件
+        // 批量处理完成事件（性能优化）
         unsigned head;
         unsigned count = 0;
         
@@ -267,15 +263,10 @@ void IOUringBackend::reaper_loop() {
                     }
                 }
             }
-            
             count++;
-            // 性能优化：批量标记为已处理
-            if (count >= BATCH_SIZE) {
-                io_uring_cq_advance(&m_ring, count);
-                count = 0;
-            }
         }
         
+        // 批量标记为已处理
         if (count > 0) {
             io_uring_cq_advance(&m_ring, count);
         }
@@ -295,11 +286,14 @@ void IOUringBackend::submit_io(IORequest* req, int op, int fd,
         return;
     }
     
-    // 性能优化：使用 io_uring_prep_rw 统一处理读写
+    // 注意：io_uring_prep_read/write 需要 void*，const_cast 是安全的
+    // 因为内核不会修改用户空间缓冲区
+    void* writeable_buf = const_cast<void*>(buf);
+    
     if (op == IORING_OP_READ) {
-        io_uring_prep_read(sqe, fd, buf, static_cast<unsigned>(len), offset);
+        io_uring_prep_read(sqe, fd, writeable_buf, static_cast<unsigned>(len), offset);
     } else if (op == IORING_OP_WRITE) {
-        io_uring_prep_write(sqe, fd, buf, static_cast<unsigned>(len), offset);
+        io_uring_prep_write(sqe, fd, writeable_buf, static_cast<unsigned>(len), offset);
     } else if (op == IORING_OP_FSYNC) {
         io_uring_prep_fsync(sqe, fd, 0);
     } else {
@@ -309,8 +303,7 @@ void IOUringBackend::submit_io(IORequest* req, int op, int fd,
     
     io_uring_sqe_set_data(sqe, req);
     
-    // 性能优化：批量提交（如果可能）
-    // 这里简单起见直接提交，实际可以累积多个请求再提交
+    // 提交请求
     io_uring_submit(&m_ring);
 }
 
@@ -486,7 +479,7 @@ void IOUringBackend::close_impl() {
     bool expected = true;
     if (!m_running.compare_exchange_strong(expected, false)) return;
     
-    // 性能优化：等待 pending I/O 完成（使用配置的超时时间）
+    // 等待 pending I/O 完成（使用配置的超时时间）
     int elapsed = 0;
     int wait_time = 1;
     while (elapsed < static_cast<int>(m_cached_close_timeout_ms) && 

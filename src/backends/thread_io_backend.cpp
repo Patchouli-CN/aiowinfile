@@ -8,12 +8,13 @@
 #include "../globals.hpp"
 #include "./utils/file_mode.hpp"
 #include <thread>
+#include <chrono>
 
 // 缓存在第一次成功获取事件循环后使用
 static PyObject   *g_cachedLoop       = nullptr;
 static PyObject   *g_cachedFutureFn   = nullptr;
 static LoopHandle *g_cachedLoopHandle = nullptr;
-static std::mutex  g_cacheMtx;  // 保护缓存的互斥锁
+static std::mutex  g_cacheMtx;
 
 static void refresh_loop_cache(PyObject *loop) {
     std::lock_guard<std::mutex> lk(g_cacheMtx);
@@ -22,7 +23,7 @@ static void refresh_loop_cache(PyObject *loop) {
     g_cachedLoop       = loop;
     g_cachedFutureFn   = PyObject_GetAttr(loop, g_str_create_future);
     if (g_cachedFutureFn) {
-        Py_INCREF(g_cachedFutureFn);  // 确保不被意外释放
+        Py_INCREF(g_cachedFutureFn);
     }
     g_cachedLoopHandle = get_or_create_loop_handle(loop);
 }
@@ -73,8 +74,7 @@ ThreadIOBackend::ThreadIOBackend(const std::string &path, const std::string &mod
         }
     }
     
-    // 关键修复：不在构造函数中获取事件循环
-    // 工作线程也不在构造函数中启动，延迟到第一次 I/O
+    // 关键：不在构造函数中启动工作线程或调用任何 Python API
 }
 
 ThreadIOBackend::~ThreadIOBackend() {
@@ -86,7 +86,7 @@ ThreadIOBackend::~ThreadIOBackend() {
 }
 
 void ThreadIOBackend::start_workers() {
-    std::lock_guard<std::mutex> lk(m_loop_init_mtx);
+    // 注意：调用此函数时已经持有 m_loop_init_mtx 锁
     if (!m_workers.empty()) return;  // 已经启动
     
     m_workers.reserve(m_num_workers);
@@ -96,36 +96,33 @@ void ThreadIOBackend::start_workers() {
 }
 
 void ThreadIOBackend::ensure_loop_initialized() {
-    // 关键修复：此函数必须在持有 GIL 的情况下调用
-    // 它只被 read/write/seek/flush/close 调用，这些函数都是从 Python 调用的，所以 GIL 是持有的
-    
+    // 快速路径
     if (m_loop_initialized) return;
     
-    std::lock_guard<std::mutex> lk(m_loop_init_mtx);
-    if (m_loop_initialized) return;
-    
-    // 获取事件循环（持有 GIL，安全）
-    PyObject *loop = PyObject_CallNoArgs(g_get_running_loop);
+    // 先获取事件循环（持有 GIL，安全）
+    PyObject* loop = PyObject_CallNoArgs(g_get_running_loop);
     if (!loop) {
+        PyErr_Clear();
         throw std::runtime_error("No running event loop");
     }
     
-    // 更新缓存
+    std::lock_guard<std::mutex> lk(m_loop_init_mtx);
+    if (m_loop_initialized) {
+        Py_DECREF(loop);
+        return;
+    }
+    
     refresh_loop_cache(loop);
-    
-    // 保存到成员变量
     m_loop = loop;
-    Py_INCREF(m_loop);  // 增加引用计数
-    
+    Py_INCREF(m_loop);
     m_create_future = g_cachedFutureFn;
     Py_INCREF(m_create_future);
-    
     m_loop_handle = g_cachedLoopHandle;
     
-    m_loop_initialized = true;
-    
-    // 启动工作线程（延迟到事件循环初始化后）
+    // 延迟启动工作线程
     start_workers();
+    
+    m_loop_initialized = true;
 }
 
 void ThreadIOBackend::worker_thread() {
@@ -151,13 +148,12 @@ void ThreadIOBackend::enqueue_task(std::function<void()> task) {
 }
 
 PyObject *ThreadIOBackend::read(int64_t size) {
-    // 确保事件循环已初始化（持有 GIL）
     ensure_loop_initialized();
     
     PyObject *future = PyObject_CallNoArgs(m_create_future);
     if (!future) return nullptr;
 
-    if (!m_running.load(std::memory_order_relaxed)) {
+    if (!m_running.load(std::memory_order_relaxed) || m_fd == -1) {
         resolve_exc(future, g_ValueError, 0, "I/O operation on closed file.");
         return future;
     }
@@ -190,7 +186,6 @@ PyObject *ThreadIOBackend::read(int64_t size) {
 
     m_pending.fetch_add(1, std::memory_order_relaxed);
     enqueue_task([this, req, offset, readSize]() {
-        // 工作线程中执行 I/O（没有 GIL）
         ssize_t got = pread(m_fd, req->buf(), readSize, offset);
         if (got >= 0) {
             complete_ok(req, static_cast<size_t>(got));
@@ -209,7 +204,7 @@ PyObject *ThreadIOBackend::write(Py_buffer *view) {
     PyObject *future = PyObject_CallNoArgs(m_create_future);
     if (!future) return nullptr;
 
-    if (!m_running.load(std::memory_order_relaxed)) {
+    if (!m_running.load(std::memory_order_relaxed) || m_fd == -1) {
         resolve_exc(future, g_ValueError, 0, "I/O operation on closed file.");
         return future;
     }
@@ -297,6 +292,7 @@ PyObject *ThreadIOBackend::flush() {
 }
 
 PyObject *ThreadIOBackend::close() {
+    // 如果从未初始化事件循环，直接关闭
     if (!m_loop_initialized) {
         close_impl();
         Py_RETURN_NONE;
@@ -312,15 +308,32 @@ PyObject *ThreadIOBackend::close() {
 void ThreadIOBackend::close_impl() {
     bool expected = true;
     if (!m_running.compare_exchange_strong(expected, false)) return;
+    
+    // 停止工作线程
     {
         std::lock_guard<std::mutex> lk(m_queueMtx);
         m_stop = true;
     }
     m_cv.notify_all();
+    
+    // 等待所有工作线程结束
     for (auto& t : m_workers) {
-        if (t.joinable()) t.join();
+        if (t.joinable()) {
+            t.join();
+        }
     }
     m_workers.clear();
+    
+    // 等待 pending I/O 完成
+    int elapsed = 0;
+    int wait_time = 1;
+    while (elapsed < static_cast<int>(m_cached_close_timeout_ms) && 
+           m_pending.load(std::memory_order_acquire) > 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(wait_time));
+        elapsed += wait_time;
+        wait_time = std::min(wait_time * 2, 32);
+    }
+    
     if (m_fd != -1) {
         ::close(m_fd);
         m_fd = -1;
@@ -330,7 +343,6 @@ void ThreadIOBackend::close_impl() {
 void ThreadIOBackend::complete_ok(IORequest *req, size_t bytes) {
     m_pending.fetch_sub(1, std::memory_order_release);
     
-    // 关键修复：在工作线程中获取 GIL
     PyGILState_STATE gs = PyGILState_Ensure();
 
     PyObject *val = nullptr;
@@ -350,7 +362,6 @@ void ThreadIOBackend::complete_ok(IORequest *req, size_t bytes) {
     Py_XDECREF(req->set_exception); 
     req->set_exception = nullptr;
 
-    // 调度到事件循环
     req->loop_handle->push(set_fn, val);
     delete req;
 
@@ -360,7 +371,6 @@ void ThreadIOBackend::complete_ok(IORequest *req, size_t bytes) {
 void ThreadIOBackend::complete_error(IORequest *req, DWORD err) {
     m_pending.fetch_sub(1, std::memory_order_release);
     
-    // 关键修复：在工作线程中获取 GIL
     PyGILState_STATE gs = PyGILState_Ensure();
 
     PyObject *exc_class = g_OSError;
@@ -399,7 +409,6 @@ IORequest *ThreadIOBackend::make_req(size_t size, PyObject *future, ReqType type
 }
 
 void ThreadIOBackend::complete_error_inline(IORequest *req, DWORD err) {
-    // 注意：此函数在持有 GIL 的上下文中调用（同步错误）
     m_pending.fetch_sub(1, std::memory_order_relaxed);
     PyObject *exc_class = g_OSError;
     PyObject *exc = PyObject_CallFunction(exc_class, "is", static_cast<int>(err), "I/O operation failed");

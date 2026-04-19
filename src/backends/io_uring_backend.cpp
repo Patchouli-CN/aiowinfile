@@ -167,6 +167,12 @@ void IOUringBackend::reaper_loop_entry(UringInstance* inst) {
     
     while (!inst->reaper_stop.load(std::memory_order_acquire)) {
         int ret = io_uring_wait_cqe(&inst->ring, &cqe);
+
+        // 处理 -EEXIST (-17) 错误，这在内核某些版本中可能出现
+        if (ret == -EEXIST) {
+            UR_LOG("reaper_loop: got -EEXIST, continuing");
+            continue;
+        }
         
         if (ret == -EINTR) {
             continue;

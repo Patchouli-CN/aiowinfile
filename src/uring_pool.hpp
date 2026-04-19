@@ -236,17 +236,8 @@ private:
             return false;
         }
         
-        // 立即等待并消费 poll CQE，避免 reaper 启动时遇到 -EEXIST
-        struct io_uring_cqe* cqe = nullptr;
-        ret = io_uring_wait_cqe(&inst->ring, &cqe);
-        if (ret < 0) {
-            UR_LOG("UringManager::setup_instance: wait for poll cqe failed, ret=%d", ret);
-        } else {
-            UR_LOG("UringManager::setup_instance: poll cqe received, res=%d", cqe->res);
-            io_uring_cq_advance(&inst->ring, 1);
-        }
-        
-        UR_LOG("UringManager::setup_instance: success, ring_fd=%d, event_fd=%d",
+        // 不等待 CQE，让 reaper 线程处理
+        UR_LOG("UringManager::setup_instance: success, ring_fd=%d, event_fd=%d (poll submitted, not waited)",
             inst->ring.ring_fd, inst->event_fd);
         return true;
     }

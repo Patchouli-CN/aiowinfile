@@ -9,7 +9,11 @@
 #include <thread>
 #include <chrono>
 #include <condition_variable>
+#include <vector>
 #include <Python.h>
+#include <sys/eventfd.h>
+#include <unistd.h>
+
 
 // ════════════════════════════════════════════════════════════════════════════
 // io_uring 实例池 - 复用 io_uring，避免频繁创建/销毁

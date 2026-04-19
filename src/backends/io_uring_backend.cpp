@@ -118,7 +118,7 @@ void IOUringBackend::teardown_uring() {
     
     // 唤醒 reaper 线程：向 eventfd 写入数据
     uint64_t val = 1;
-    write(m_event_fd, &val, sizeof(val));
+    ::write(m_event_fd, &val, sizeof(val));
     
     if (m_reaper_thread.joinable()) {
         m_reaper_thread.join();

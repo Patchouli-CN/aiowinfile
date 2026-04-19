@@ -9,15 +9,19 @@
 #include <chrono>
 #include "../globals.hpp"
 #include "./utils/file_mode.hpp"
+#include "./utils/error_util.hpp"
 #include <thread>
 
-// 缓存在第一次成功获取事件循环后使用
-static PyObject   *g_cachedLoop       = nullptr;
-static PyObject   *g_cachedFutureFn   = nullptr;
-static LoopHandle *g_cachedLoopHandle = nullptr;
+// ════════════════════════════════════════════════════════════════════════════
+// 全局缓存（线程安全）
+// ════════════════════════════════════════════════════════════════════════════
+
+static PyObject*   g_cachedLoop       = nullptr;
+static PyObject*   g_cachedFutureFn   = nullptr;
+static LoopHandle* g_cachedLoopHandle = nullptr;
 static std::mutex  g_cacheMtx;
 
-static void refresh_loop_cache(PyObject *loop) {
+static void refresh_loop_cache(PyObject* loop) {
     std::lock_guard<std::mutex> lk(g_cacheMtx);
     if (loop == g_cachedLoop) return;
     Py_XDECREF(g_cachedFutureFn);
@@ -28,6 +32,10 @@ static void refresh_loop_cache(PyObject *loop) {
     }
     g_cachedLoopHandle = get_or_create_loop_handle(loop);
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// 构造函数 / 析构函数
+// ════════════════════════════════════════════════════════════════════════════
 
 ThreadIOBackend::ThreadIOBackend(const std::string &path, const std::string &mode) {
     auto& cfg = ayafileio::config();
@@ -85,6 +93,10 @@ ThreadIOBackend::~ThreadIOBackend() {
         Py_XDECREF(m_loop);
     }
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// 初始化方法
+// ════════════════════════════════════════════════════════════════════════════
 
 void ThreadIOBackend::start_workers() {
     if (!m_workers.empty()) return;
@@ -144,15 +156,29 @@ void ThreadIOBackend::enqueue_task(std::function<void()> task) {
     m_cv.notify_one();
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// 公共 I/O 接口
+// ════════════════════════════════════════════════════════════════════════════
+
 PyObject *ThreadIOBackend::read(int64_t size) {
-    ensure_loop_initialized();
+    // 确保事件循环已初始化
+    try {
+        ensure_loop_initialized();
+    } catch (const std::runtime_error&) {
+        // 没有事件循环，返回带异常的 Future
+        return create_rejected_future(nullptr, g_ValueError, 
+                                      "No running event loop", 0);
+    }
     
-    PyObject *future = PyObject_CallNoArgs(m_create_future);
+    PyObject* future = PyObject_CallNoArgs(m_create_future);
     if (!future) return nullptr;
 
-    if (!m_running.load(std::memory_order_relaxed) || m_fd == -1) {
-        resolve_exc(future, g_ValueError, 0, "I/O operation on closed file.");
-        return future;
+    // 检查文件是否已关闭
+    PyObject* closed_future = check_closed_and_return_future(
+        m_running.load(std::memory_order_relaxed), m_fd, m_create_future);
+    if (closed_future) {
+        Py_DECREF(future);
+        return closed_future;
     }
 
     uint64_t offset; size_t readSize;
@@ -196,16 +222,24 @@ PyObject *ThreadIOBackend::read(int64_t size) {
 }
 
 PyObject *ThreadIOBackend::write(Py_buffer *view) {
-    ensure_loop_initialized();
+    try {
+        ensure_loop_initialized();
+    } catch (const std::runtime_error&) {
+        return create_rejected_future(nullptr, g_ValueError, 
+                                      "No running event loop", 0);
+    }
     
     size_t size = static_cast<size_t>(view->len);
-    PyObject *future = PyObject_CallNoArgs(m_create_future);
+    PyObject* future = PyObject_CallNoArgs(m_create_future);
     if (!future) return nullptr;
 
-    if (!m_running.load(std::memory_order_relaxed) || m_fd == -1) {
-        resolve_exc(future, g_ValueError, 0, "I/O operation on closed file.");
-        return future;
+    PyObject* closed_future = check_closed_and_return_future(
+        m_running.load(std::memory_order_relaxed), m_fd, m_create_future);
+    if (closed_future) {
+        Py_DECREF(future);
+        return closed_future;
     }
+    
     if (size == 0) {
         PyObject *z = PyLong_FromLong(0);
         resolve_ok(future, z); Py_DECREF(z);
@@ -246,10 +280,16 @@ PyObject *ThreadIOBackend::write(Py_buffer *view) {
 }
 
 PyObject *ThreadIOBackend::seek(int64_t offset, int whence) {
-    ensure_loop_initialized();
+    try {
+        ensure_loop_initialized();
+    } catch (const std::runtime_error&) {
+        return create_rejected_future(nullptr, g_ValueError, 
+                                      "No running event loop", 0);
+    }
     
-    PyObject *future = PyObject_CallNoArgs(m_create_future);
+    PyObject* future = PyObject_CallNoArgs(m_create_future);
     if (!future) return nullptr;
+    
     {
         std::lock_guard<std::mutex> lk(m_posMtx);
         if (whence == 0) {
@@ -275,14 +315,21 @@ PyObject *ThreadIOBackend::seek(int64_t offset, int whence) {
 }
 
 PyObject *ThreadIOBackend::flush() {
-    ensure_loop_initialized();
+    try {
+        ensure_loop_initialized();
+    } catch (const std::runtime_error&) {
+        return create_rejected_future(nullptr, g_ValueError, 
+                                      "No running event loop", 0);
+    }
     
-    PyObject *future = PyObject_CallNoArgs(m_create_future);
+    PyObject* future = PyObject_CallNoArgs(m_create_future);
     if (!future) return nullptr;
+    
     if (!m_running.load(std::memory_order_relaxed) || m_fd == -1) {
         resolve_exc(future, g_OSError, 0, "flush on closed file");
         return future;
     }
+    
     if (fsync(m_fd) != 0) {
         set_os_error("fsync failed");
         resolve_exc(future, g_OSError, errno, "fsync failed");
@@ -293,12 +340,29 @@ PyObject *ThreadIOBackend::flush() {
 }
 
 PyObject *ThreadIOBackend::close() {
+    // 未初始化事件循环的情况
     if (!m_loop_initialized) {
+        PyObject* loop = PyObject_CallNoArgs(g_get_running_loop);
+        if (!loop) {
+            PyErr_Clear();
+            close_impl();
+            Py_RETURN_NONE;
+        }
+        
+        PyObject* future = create_resolved_future(loop, Py_None);
+        Py_DECREF(loop);
+        
+        if (!future) {
+            close_impl();
+            return nullptr;
+        }
+        
         close_impl();
-        Py_RETURN_NONE;
+        return future;
     }
     
-    PyObject *future = PyObject_CallNoArgs(m_create_future);
+    // 正常路径：已初始化事件循环
+    PyObject* future = PyObject_CallNoArgs(m_create_future);
     if (!future) return nullptr;
     close_impl();
     resolve_ok(future, Py_None);
@@ -336,6 +400,10 @@ void ThreadIOBackend::close_impl() {
         m_fd = -1;
     }
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// 完成处理（工作线程中调用）
+// ════════════════════════════════════════════════════════════════════════════
 
 void ThreadIOBackend::complete_ok(IORequest *req, size_t bytes) {
     m_pending.fetch_sub(1, std::memory_order_release);
@@ -385,6 +453,10 @@ void ThreadIOBackend::complete_error(IORequest *req, DWORD err) {
 
     PyGILState_Release(gs);
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// 辅助方法
+// ════════════════════════════════════════════════════════════════════════════
 
 IORequest *ThreadIOBackend::make_req(size_t size, PyObject *future, ReqType type) {
     auto *req = new IORequest();

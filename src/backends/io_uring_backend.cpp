@@ -4,6 +4,7 @@
 #include "../globals.hpp"
 #include "../config.hpp"
 #include "./utils/file_mode.hpp"
+#include "./utils/error_util.hpp"
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -70,7 +71,7 @@ IOUringBackend::IOUringBackend(const std::string& path, const std::string& mode)
         throw_os_error("Failed to open file", path.c_str());
     }
     
-    // 缓存配置值（性能优化：避免频繁加锁读取配置）
+    // 缓存配置值
     auto& cfg = ayafileio::config();
     m_cached_buffer_size = cfg.buffer_size();
     m_cached_buffer_pool_max = cfg.buffer_pool_max();
@@ -89,9 +90,6 @@ IOUringBackend::IOUringBackend(const std::string& path, const std::string& mode)
             m_filePos = static_cast<uint64_t>(st.st_size);
         }
     }
-    
-    // 关键：不在构造函数中调用任何 Python API
-    // 事件循环初始化和 io_uring 启动都延迟到第一次 I/O 操作
 }
 
 IOUringBackend::~IOUringBackend() {
@@ -107,10 +105,8 @@ IOUringBackend::~IOUringBackend() {
 // ════════════════════════════════════════════════════════════════════════════
 
 void IOUringBackend::ensure_loop_initialized() {
-    // 快速路径：已经初始化
     if (m_loop_initialized) return;
     
-    // 关键修复：先获取事件循环（持有 GIL，安全），再加锁
     PyObject* loop = PyObject_CallNoArgs(g_get_running_loop);
     if (!loop) {
         PyErr_Clear();
@@ -119,15 +115,12 @@ void IOUringBackend::ensure_loop_initialized() {
     
     std::lock_guard<std::mutex> lk(m_loop_init_mtx);
     if (m_loop_initialized) {
-        // 其他线程已经初始化了
         Py_DECREF(loop);
         return;
     }
     
-    // 更新全局缓存
     refresh_loop_cache(loop);
     
-    // 保存到成员变量
     m_loop = loop;
     Py_INCREF(m_loop);
     
@@ -136,7 +129,6 @@ void IOUringBackend::ensure_loop_initialized() {
     
     m_loop_handle = g_cachedLoopHandle;
     
-    // 启动 io_uring（如果还没启动）
     if (!m_uring_started) {
         start_uring();
     }
@@ -149,13 +141,11 @@ void IOUringBackend::start_uring() {
     std::lock_guard<std::mutex> lk(m_loop_init_mtx);
     if (m_uring_started) return;
     
-    // 创建 eventfd 用于唤醒 reaper 线程
     m_event_fd = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
     if (m_event_fd == -1) {
         throw_os_error("Failed to create eventfd");
     }
     
-    // 设置 io_uring
     if (!setup_uring()) {
         ::close(m_event_fd);
         m_event_fd = -1;
@@ -171,12 +161,10 @@ bool IOUringBackend::setup_uring() {
         flags |= IORING_SETUP_SQPOLL;
     }
     
-    // 性能优化：使用 IORING_SETUP_SINGLE_ISSUER 减少锁竞争（Linux 6.0+）
 #ifdef IORING_SETUP_SINGLE_ISSUER
     flags |= IORING_SETUP_SINGLE_ISSUER;
 #endif
     
-    // 性能优化：使用 IORING_SETUP_DEFER_TASKRUN 减少不必要的唤醒
 #ifdef IORING_SETUP_DEFER_TASKRUN
     flags |= IORING_SETUP_DEFER_TASKRUN;
 #endif
@@ -196,11 +184,10 @@ void IOUringBackend::teardown_uring() {
     
     m_reaper_stop.store(true);
     
-    // 唤醒 reaper 线程
     if (m_event_fd != -1) {
         uint64_t val = 1;
         ssize_t written = ::write(m_event_fd, &val, sizeof(val));
-        (void)written;  // 忽略返回值
+        (void)written;
     }
     
     if (m_reaper_thread.joinable()) {
@@ -218,7 +205,7 @@ void IOUringBackend::teardown_uring() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// Reaper 线程（处理 I/O 完成事件）
+// Reaper 线程
 // ════════════════════════════════════════════════════════════════════════════
 
 void IOUringBackend::reaper_loop() {
@@ -226,7 +213,6 @@ void IOUringBackend::reaper_loop() {
     struct io_uring_sqe* sqe;
     struct io_uring_cqe* cqe;
     
-    // 将 eventfd 添加到 io_uring 中（用于唤醒）
     sqe = io_uring_get_sqe(&m_ring);
     if (sqe) {
         io_uring_prep_read(sqe, m_event_fd, &event_val, sizeof(event_val), 0);
@@ -235,14 +221,12 @@ void IOUringBackend::reaper_loop() {
     }
     
     while (!m_reaper_stop.load(std::memory_order_relaxed)) {
-        // 等待完成事件
         int ret = io_uring_wait_cqe(&m_ring, &cqe);
         if (ret < 0) {
             if (errno == EINTR) continue;
             break;
         }
         
-        // 批量处理完成事件（性能优化）
         unsigned head;
         unsigned count = 0;
         
@@ -255,7 +239,6 @@ void IOUringBackend::reaper_loop() {
                     complete_error(req, static_cast<DWORD>(-cqe->res));
                 }
             } else {
-                // eventfd 唤醒事件，需要重新提交
                 if (!m_reaper_stop.load(std::memory_order_relaxed)) {
                     sqe = io_uring_get_sqe(&m_ring);
                     if (sqe) {
@@ -268,7 +251,6 @@ void IOUringBackend::reaper_loop() {
             count++;
         }
         
-        // 批量标记为已处理
         if (count > 0) {
             io_uring_cq_advance(&m_ring, count);
         }
@@ -283,13 +265,10 @@ void IOUringBackend::submit_io(IORequest* req, int op, int fd,
                                 const void* buf, size_t len, off_t offset) {
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
-        // 队列满，同步处理错误
         complete_error(req, EBUSY);
         return;
     }
     
-    // 注意：io_uring_prep_read/write 需要 void*，const_cast 是安全的
-    // 因为内核不会修改用户空间缓冲区
     void* writeable_buf = const_cast<void*>(buf);
     
     if (op == IORING_OP_READ) {
@@ -304,8 +283,6 @@ void IOUringBackend::submit_io(IORequest* req, int op, int fd,
     }
     
     io_uring_sqe_set_data(sqe, req);
-    
-    // 提交请求
     io_uring_submit(&m_ring);
 }
 
@@ -314,14 +291,21 @@ void IOUringBackend::submit_io(IORequest* req, int op, int fd,
 // ════════════════════════════════════════════════════════════════════════════
 
 PyObject* IOUringBackend::read(int64_t size) {
-    ensure_loop_initialized();
+    try {
+        ensure_loop_initialized();
+    } catch (const std::runtime_error&) {
+        return create_rejected_future(nullptr, g_ValueError, 
+                                      "No running event loop", 0);
+    }
     
     PyObject* future = PyObject_CallNoArgs(m_create_future);
     if (!future) return nullptr;
     
-    if (!m_running.load(std::memory_order_relaxed) || m_fd == -1) {
-        resolve_exc(future, g_ValueError, 0, "I/O operation on closed file.");
-        return future;
+    PyObject* closed_future = check_closed_and_return_future(
+        m_running.load(std::memory_order_relaxed), m_fd, m_create_future);
+    if (closed_future) {
+        Py_DECREF(future);
+        return closed_future;
     }
     
     uint64_t offset;
@@ -368,15 +352,22 @@ PyObject* IOUringBackend::read(int64_t size) {
 }
 
 PyObject* IOUringBackend::write(Py_buffer* view) {
-    ensure_loop_initialized();
+    try {
+        ensure_loop_initialized();
+    } catch (const std::runtime_error&) {
+        return create_rejected_future(nullptr, g_ValueError, 
+                                      "No running event loop", 0);
+    }
     
     size_t size = static_cast<size_t>(view->len);
     PyObject* future = PyObject_CallNoArgs(m_create_future);
     if (!future) return nullptr;
     
-    if (!m_running.load(std::memory_order_relaxed) || m_fd == -1) {
-        resolve_exc(future, g_ValueError, 0, "I/O operation on closed file.");
-        return future;
+    PyObject* closed_future = check_closed_and_return_future(
+        m_running.load(std::memory_order_relaxed), m_fd, m_create_future);
+    if (closed_future) {
+        Py_DECREF(future);
+        return closed_future;
     }
     
     if (size == 0) {
@@ -415,7 +406,12 @@ PyObject* IOUringBackend::write(Py_buffer* view) {
 }
 
 PyObject* IOUringBackend::seek(int64_t offset, int whence) {
-    ensure_loop_initialized();
+    try {
+        ensure_loop_initialized();
+    } catch (const std::runtime_error&) {
+        return create_rejected_future(nullptr, g_ValueError, 
+                                      "No running event loop", 0);
+    }
     
     PyObject* future = PyObject_CallNoArgs(m_create_future);
     if (!future) return nullptr;
@@ -448,7 +444,12 @@ PyObject* IOUringBackend::seek(int64_t offset, int whence) {
 }
 
 PyObject* IOUringBackend::flush() {
-    ensure_loop_initialized();
+    try {
+        ensure_loop_initialized();
+    } catch (const std::runtime_error&) {
+        return create_rejected_future(nullptr, g_ValueError, 
+                                      "No running event loop", 0);
+    }
     
     PyObject* future = PyObject_CallNoArgs(m_create_future);
     if (!future) return nullptr;
@@ -467,8 +468,23 @@ PyObject* IOUringBackend::flush() {
 
 PyObject* IOUringBackend::close() {
     if (!m_loop_initialized) {
+        PyObject* loop = PyObject_CallNoArgs(g_get_running_loop);
+        if (!loop) {
+            PyErr_Clear();
+            close_impl();
+            Py_RETURN_NONE;
+        }
+        
+        PyObject* future = create_resolved_future(loop, Py_None);
+        Py_DECREF(loop);
+        
+        if (!future) {
+            close_impl();
+            return nullptr;
+        }
+        
         close_impl();
-        Py_RETURN_NONE;
+        return future;
     }
     
     ensure_loop_initialized();
@@ -484,14 +500,13 @@ void IOUringBackend::close_impl() {
     bool expected = true;
     if (!m_running.compare_exchange_strong(expected, false)) return;
     
-    // 等待 pending I/O 完成（使用配置的超时时间）
     int elapsed = 0;
     int wait_time = 1;
     while (elapsed < static_cast<int>(m_cached_close_timeout_ms) && 
            m_pending.load(std::memory_order_acquire) > 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(wait_time));
         elapsed += wait_time;
-        wait_time = std::min(wait_time * 2, 32);  // 指数退避
+        wait_time = std::min(wait_time * 2, 32);
     }
     
     teardown_uring();
@@ -503,13 +518,12 @@ void IOUringBackend::close_impl() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// 完成处理（工作线程中调用）
+// 完成处理
 // ════════════════════════════════════════════════════════════════════════════
 
 void IOUringBackend::complete_ok(IORequest* req, size_t bytes) {
     m_pending.fetch_sub(1, std::memory_order_release);
     
-    // 关键修复：在工作线程中获取 GIL
     PyGILState_STATE gs = PyGILState_Ensure();
     
     PyObject* val = nullptr;
@@ -538,7 +552,6 @@ void IOUringBackend::complete_ok(IORequest* req, size_t bytes) {
 void IOUringBackend::complete_error(IORequest* req, DWORD err) {
     m_pending.fetch_sub(1, std::memory_order_release);
     
-    // 关键修复：在工作线程中获取 GIL
     PyGILState_STATE gs = PyGILState_Ensure();
     
     PyObject* exc_class = map_posix_error(static_cast<int>(err));
@@ -574,7 +587,6 @@ IORequest* IOUringBackend::make_req(size_t size, PyObject* future, ReqType type)
     req->reqSize = size;
     req->type = type;
     
-    // 性能优化：使用缓冲区池
     if (size <= m_cached_buffer_size) {
         req->poolBuf = pool_acquire_with_size(size);
     } else {
@@ -584,7 +596,6 @@ IORequest* IOUringBackend::make_req(size_t size, PyObject* future, ReqType type)
 }
 
 void IOUringBackend::complete_error_inline(IORequest* req, DWORD err) {
-    // 注意：此函数在持有 GIL 的上下文中调用（同步错误）
     m_pending.fetch_sub(1, std::memory_order_relaxed);
     
     PyObject* exc_class = map_posix_error(static_cast<int>(err));

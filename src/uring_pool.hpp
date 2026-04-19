@@ -31,7 +31,9 @@ struct UringInstance {
     struct io_uring ring;
     std::thread reaper_thread;
     std::atomic<bool> reaper_stop{false};
-    PyObject* loop = nullptr;        // 关联的事件循环
+    std::atomic<bool> reaper_started{false};  
+    std::mutex start_mutex;               
+    PyObject* loop = nullptr; 
     int event_fd = -1;
     
     unsigned queue_depth = 256;
@@ -146,10 +148,13 @@ public:
     
     // 启动 reaper 线程（由 IOUringBackend 调用）
     void start_reaper(std::shared_ptr<UringInstance> inst) {
-        if (!inst->reaper_thread.joinable()) {
-            inst->reaper_thread = std::thread(inst->reaper_func, inst.get());
-            UR_LOG("UringManager::start_reaper: started reaper for inst=%p", (void*)inst.get());
+        std::lock_guard<std::mutex> lk(inst->start_mutex);  // 需要添加这个 mutex
+        if (inst->reaper_started.exchange(true)) {
+            UR_LOG("UringManager::start_reaper: reaper already started for inst=%p", (void*)inst.get());
+            return;
         }
+        inst->reaper_thread = std::thread(inst->reaper_func, inst.get());
+        UR_LOG("UringManager::start_reaper: started reaper for inst=%p", (void*)inst.get());
     }
     
     // 清理所有实例（模块退出时调用）

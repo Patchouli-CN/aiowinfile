@@ -428,7 +428,7 @@ class TestRunner:
             self.passed += 1
             print(f"  ✅ {name}")
         except Exception as e:
-            # ... 错误处理
+            ...
         finally:
             if self.enable_timeout_diag:
                 _timeout_diag.stop_test()

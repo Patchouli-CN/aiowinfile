@@ -30,7 +30,7 @@ ThreadIOBackend::ThreadIOBackend(const std::string &path, const std::string &mod
     m_cached_buffer_pool_max = cfg.buffer_pool_max();
     m_cached_close_timeout_ms = cfg.close_timeout_ms();
     
-    // 保存工作线程数量，但不立即启动
+    // 保存工作线程数量
     m_num_workers = cfg.io_worker_count();
     if (m_num_workers == 0) {
         unsigned hc = std::thread::hardware_concurrency();
@@ -71,7 +71,11 @@ ThreadIOBackend::ThreadIOBackend(const std::string &path, const std::string &mod
         }
     }
     
-    // 不再在构造函数中启动工作线程
+    // 在构造函数中尝试初始化事件循环（不持有锁）
+    try_init_loop_in_constructor();
+    
+    // 启动工作线程（延迟到需要时才启动？不，直接启动更简单）
+    start_workers();
 }
 
 ThreadIOBackend::~ThreadIOBackend() {
@@ -80,6 +84,26 @@ ThreadIOBackend::~ThreadIOBackend() {
         Py_XDECREF(m_create_future);
         Py_XDECREF(m_loop);
     }
+}
+
+bool ThreadIOBackend::try_init_loop_in_constructor() {
+    // 尝试获取当前运行的事件循环（不持有锁）
+    PyObject *loop = PyObject_CallNoArgs(g_get_running_loop);
+    if (!loop) {
+        // 没有运行中的事件循环，清除异常，延迟初始化
+        PyErr_Clear();
+        return false;
+    }
+    
+    // 成功获取，初始化
+    refresh_loop_cache(loop);
+    m_loop = loop;
+    m_create_future = g_cachedFutureFn;
+    Py_INCREF(m_create_future);
+    m_loop_handle = g_cachedLoopHandle;
+    m_loop_initialized = true;
+    
+    return true;
 }
 
 void ThreadIOBackend::start_workers() {
@@ -96,25 +120,27 @@ void ThreadIOBackend::start_workers() {
 
 void ThreadIOBackend::ensure_loop_initialized() {
     if (m_loop_initialized) return;
-    std::lock_guard<std::mutex> lk(m_loop_init_mtx);
-    if (m_loop_initialized) return;
     
-    // 先启动工作线程
-    if (!m_workers_started) {
-        start_workers();
-    }
-    
+    // 关键修复：先获取事件循环，再加锁（避免持有锁时调用 Python API）
     PyObject *loop = PyObject_CallNoArgs(g_get_running_loop);
     if (!loop) {
         PyErr_Clear();
         throw std::runtime_error("No running event loop");
     }
+    
+    // 加锁更新状态
+    std::lock_guard<std::mutex> lk(m_loop_init_mtx);
+    if (m_loop_initialized) {
+        // 已经被其他线程初始化了
+        Py_DECREF(loop);
+        return;
+    }
+    
     refresh_loop_cache(loop);
     m_loop = loop;
     m_create_future = g_cachedFutureFn;
     Py_INCREF(m_create_future);
     m_loop_handle = g_cachedLoopHandle;
-    
     m_loop_initialized = true;
 }
 
@@ -285,7 +311,6 @@ PyObject *ThreadIOBackend::flush() {
 }
 
 PyObject *ThreadIOBackend::close() {
-    // close 可能在没有初始化事件循环的情况下调用
     if (!m_loop_initialized) {
         close_impl();
         Py_RETURN_NONE;

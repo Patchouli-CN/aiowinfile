@@ -10,7 +10,7 @@
 #include <cerrno>
 #include <sys/eventfd.h>
 
-// 缓存事件循环 (与其他后端相同)
+// 缓存事件循环
 static PyObject* g_cachedLoop = nullptr;
 static PyObject* g_cachedFutureFn = nullptr;
 static LoopHandle* g_cachedLoopHandle = nullptr;
@@ -46,7 +46,7 @@ IOUringBackend::IOUringBackend(const std::string& path, const std::string& mode)
         throw py::python_error();
     }
     
-    // 缓存配置值（性能优化）
+    // 缓存配置值
     auto& cfg = ayafileio::config();
     m_cached_buffer_size = cfg.buffer_size();
     m_cached_buffer_pool_max = cfg.buffer_pool_max();
@@ -66,7 +66,8 @@ IOUringBackend::IOUringBackend(const std::string& path, const std::string& mode)
         }
     }
     
-    // 不在构造函数中初始化 io_uring，延迟到第一次 I/O 操作
+    // 在构造函数中尝试初始化事件循环
+    try_init_loop_in_constructor();
 }
 
 IOUringBackend::~IOUringBackend() {
@@ -75,6 +76,24 @@ IOUringBackend::~IOUringBackend() {
         Py_XDECREF(m_create_future);
         Py_XDECREF(m_loop);
     }
+}
+
+bool IOUringBackend::try_init_loop_in_constructor() {
+    // 尝试获取当前运行的事件循环（不持有锁）
+    PyObject *loop = PyObject_CallNoArgs(g_get_running_loop);
+    if (!loop) {
+        PyErr_Clear();
+        return false;
+    }
+    
+    refresh_loop_cache(loop);
+    m_loop = loop;
+    m_create_future = g_cachedFutureFn;
+    Py_INCREF(m_create_future);
+    m_loop_handle = g_cachedLoopHandle;
+    m_loop_initialized = true;
+    
+    return true;
 }
 
 void IOUringBackend::start_uring() {
@@ -100,19 +119,25 @@ void IOUringBackend::start_uring() {
 
 void IOUringBackend::ensure_loop_initialized() {
     if (m_loop_initialized) return;
-    std::lock_guard<std::mutex> lk(m_loop_init_mtx);
-    if (m_loop_initialized) return;
     
-    // 先启动 io_uring
-    if (!m_uring_started) {
-        start_uring();
-    }
-    
-    PyObject* loop = PyObject_CallNoArgs(g_get_running_loop);
+    // 关键修复：先获取事件循环，再加锁
+    PyObject *loop = PyObject_CallNoArgs(g_get_running_loop);
     if (!loop) {
         PyErr_Clear();
         throw std::runtime_error("No running event loop");
     }
+    
+    std::lock_guard<std::mutex> lk(m_loop_init_mtx);
+    if (m_loop_initialized) {
+        Py_DECREF(loop);
+        return;
+    }
+    
+    // 启动 io_uring
+    if (!m_uring_started) {
+        start_uring();
+    }
+    
     refresh_loop_cache(loop);
     m_loop = loop;
     m_create_future = g_cachedFutureFn;
@@ -145,7 +170,7 @@ void IOUringBackend::teardown_uring() {
     if (m_event_fd != -1) {
         uint64_t val = 1;
         ssize_t written = ::write(m_event_fd, &val, sizeof(val));
-        (void)written;  // 忽略返回值
+        (void)written;
     }
     
     if (m_reaper_thread.joinable()) {
@@ -162,7 +187,6 @@ void IOUringBackend::teardown_uring() {
 }
 
 void IOUringBackend::reaper_loop() {
-    // 分配一个小的缓冲区来消费 eventfd 的值
     uint64_t event_val;
     
     // 将 eventfd 添加到 io_uring 中
@@ -446,7 +470,6 @@ IORequest* IOUringBackend::make_req(size_t size, PyObject* future, ReqType type)
     req->reqSize = size;
     req->type = type;
     
-    // 使用按需分配的缓冲区池
     if (size <= m_cached_buffer_size) {
         req->poolBuf = pool_acquire_with_size(size);
     } else {

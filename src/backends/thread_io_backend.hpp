@@ -32,24 +32,26 @@ private:
     uint64_t m_filePos = 0;
     bool m_appendMode = false;
     
-    // 延迟初始化的事件循环相关成员
+    // 事件循环相关成员
     bool m_loop_initialized = false;
-    bool m_workers_started = false;  // 新增：工作线程是否已启动
+    bool m_workers_started = false;
     std::mutex m_loop_init_mtx;
     PyObject* m_loop = nullptr;
     PyObject* m_create_future = nullptr;
     LoopHandle* m_loop_handle = nullptr;
 
-    // Thread pool for async operations
+    // 线程池
     std::vector<std::thread> m_workers;
-    unsigned m_num_workers = 0;  // 新增：保存工作线程数量
+    unsigned m_num_workers = 0;
     std::mutex m_queueMtx;
     std::queue<std::function<void()>> m_taskQueue;
     std::condition_variable m_cv;
     bool m_stop = false;
 
-    void ensure_loop_initialized();
-    void start_workers();  // 新增：启动工作线程
+    // 初始化方法
+    bool try_init_loop_in_constructor();  // 构造函数中尝试初始化（不持有锁）
+    void ensure_loop_initialized();       // 延迟初始化（I/O 时调用）
+    void start_workers();
     void worker_thread();
     void enqueue_task(std::function<void()> task);
 

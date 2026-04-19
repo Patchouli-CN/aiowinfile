@@ -234,7 +234,7 @@ PyObject *ThreadIOBackend::write(Py_buffer *view) {
     if (!future) return nullptr;
 
     PyObject* closed_future = check_closed_and_return_future(
-        m_running.load(std::memory_order_relaxed), m_fd, m_create_future);
+        m_running.load(std::memory_order_relaxed), m_fd, m_create_future, m_loop);
     if (closed_future) {
         Py_DECREF(future);
         return closed_future;

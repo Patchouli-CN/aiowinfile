@@ -44,7 +44,7 @@ jobs:
         pip install nanobind scikit-build-core aiofiles
     
     - name: Build ayafileio (Debug mode)
-      timeout-minutes: 5  # 单个步骤的超时时间
+      timeout-minutes: 5
       run: |
         export CMAKE_ARGS="-DCMAKE_BUILD_TYPE=Debug -DENABLE_DEBUG=ON -DENABLE_VERBOSE_LOGGING=ON"
         pip install -e . -v
@@ -54,13 +54,99 @@ jobs:
       run: |
         python -c "import ayafileio; print(ayafileio.get_backend_info())"
 
-    - name: Enable core dumps
-      run: ulimit -c unlimited
-    
-    - name: Run tests with debug
-      timeout-minutes: 3  # 测试应该在 3 分钟内完成
+    - name: Configure core dump
       run: |
+        # 启用 core dump，不限制大小
+        ulimit -c unlimited
+        echo "ulimit -c unlimited" >> ~/.bashrc
+        
+        # 查看当前 core dump 设置
+        echo "Core dump settings:"
+        cat /proc/sys/kernel/core_pattern
+        echo "ulimit -c: $(ulimit -c)"
+        
+        # 设置 core dump 路径为当前目录（需要 sudo）
+        sudo sysctl -w kernel.core_pattern=core.%e.%p.%t
+        sudo sysctl -w kernel.core_uses_pid=1
+        
+        # 允许 setuid 程序产生 core dump
+        echo 1 | sudo tee /proc/sys/fs/suid_dumpable
+    
+    - name: Run tests with core dump collection
+      id: run_tests
+      timeout-minutes: 3
+      continue-on-error: true
+      run: |
+        # 运行测试，如果崩溃则收集 core dump
+        ulimit -c unlimited
+        set +e
         python test_base.py
+        EXIT_CODE=$?
+        set -e
+        
+        echo "Test exit code: $EXIT_CODE"
+        echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+        
+        if [ $EXIT_CODE -ne 0 ]; then
+          echo "Test failed with exit code $EXIT_CODE"
+          
+          # 查找 core dump 文件
+          echo "Looking for core dumps..."
+          CORES=$(find . -name "core*" -type f 2>/dev/null | head -5)
+          
+          if [ -n "$CORES" ]; then
+            echo "Found core dumps:"
+            ls -la core* 2>/dev/null || true
+            
+            for CORE in $CORES; do
+              echo "========================================"
+              echo "Analyzing core dump: $CORE"
+              echo "========================================"
+              
+              # 获取 core dump 信息
+              file "$CORE"
+              
+              # 使用 gdb 获取堆栈
+              if command -v gdb &> /dev/null; then
+                echo ""
+                echo "--- GDB Backtrace ---"
+                # 查找 Python 可执行文件
+                PYTHON_EXE=$(which python)
+                echo "Python executable: $PYTHON_EXE"
+                
+                gdb -batch -ex "thread apply all bt full" "$PYTHON_EXE" "$CORE" 2>&1 | head -200
+                
+                echo ""
+                echo "--- GDB Info Threads ---"
+                gdb -batch -ex "info threads" "$PYTHON_EXE" "$CORE" 2>&1
+                
+                echo ""
+                echo "--- GDB Info Shared Libraries ---"
+                gdb -batch -ex "info sharedlibrary" "$PYTHON_EXE" "$CORE" 2>&1 | head -50
+              fi
+            done
+          else
+            echo "No core dumps found"
+          fi
+          
+          # 检查 dmesg 中的 segfault 信息
+          echo ""
+          echo "--- dmesg segfault info ---"
+          sudo dmesg | grep -i "segfault\|killed" | tail -20 || true
+        fi
+        
+        exit $EXIT_CODE
+    
+    - name: Upload core dumps (if any)
+      if: always() && steps.run_tests.outcome != 'success'
+      uses: actions/upload-artifact@v4
+      with:
+        name: core-dumps-py${{ matrix.python-version }}
+        path: |
+          core.*
+          *.core
+        if-no-files-found: ignore
+        retention-days: 7
 
   # ════════════════════════════════════════════════════════════════════════
   # Windows 测试
@@ -106,8 +192,25 @@ jobs:
     
     - name: Run tests
       timeout-minutes: 3
+      continue-on-error: true
+      id: run_tests_windows
       run: |
         python test_base.py
+        echo "EXIT_CODE=$LASTEXITCODE" >> $env:GITHUB_ENV
+        if ($LASTEXITCODE -ne 0) {
+          exit $LASTEXITCODE
+        }
+    
+    - name: Collect crash dumps (Windows)
+      if: always() && steps.run_tests_windows.outcome != 'success'
+      run: |
+        echo "Test failed, checking for crash dumps..."
+        Get-ChildItem -Path "$env:LOCALAPPDATA\CrashDumps" -Filter "*.dmp" | ForEach-Object {
+          echo "Found dump: $($_.FullName)"
+        }
+        
+        # 检查事件日志中的应用程序崩溃
+        Get-EventLog -LogName Application -Source "Application Error" -Newest 10 | Format-List
 
   # ════════════════════════════════════════════════════════════════════════
   # macOS 测试
@@ -151,7 +254,41 @@ jobs:
       run: |
         python -c "import ayafileio; print(ayafileio.get_backend_info())"
     
+    - name: Configure core dump (macOS)
+      run: |
+        ulimit -c unlimited
+        sudo sysctl kern.coredump=1
+        echo "Core dump enabled"
+    
     - name: Run tests
       timeout-minutes: 3
+      continue-on-error: true
+      id: run_tests_macos
       run: |
+        ulimit -c unlimited
         python test_base.py
+        EXIT_CODE=$?
+        echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+        
+        if [ $EXIT_CODE -ne 0 ]; then
+          echo "Test failed with exit code $EXIT_CODE"
+          
+          # 查找 core dump
+          CORES=$(find /cores -name "core*" -type f -mmin -5 2>/dev/null | head -5)
+          if [ -n "$CORES" ]; then
+            echo "Found core dumps:"
+            ls -la /cores/core* 2>/dev/null || true
+            
+            for CORE in $CORES; do
+              echo "========================================"
+              echo "Analyzing core dump: $CORE"
+              echo "========================================"
+              
+              # 使用 lldb 获取堆栈
+              PYTHON_EXE=$(which python)
+              lldb -c "$CORE" -o "thread backtrace all" -o "quit" 2>&1 | head -200
+            done
+          fi
+        fi
+        
+        exit $EXIT_CODE

@@ -32,9 +32,8 @@ private:
     uint64_t m_filePos = 0;
     bool m_appendMode = false;
     
-    // 事件循环相关成员
+    // 事件循环相关成员 - 延迟初始化，但在第一次 I/O 前必须完成
     bool m_loop_initialized = false;
-    bool m_workers_started = false;
     std::mutex m_loop_init_mtx;
     PyObject* m_loop = nullptr;
     PyObject* m_create_future = nullptr;
@@ -49,12 +48,16 @@ private:
     bool m_stop = false;
 
     // 初始化方法
-    bool try_init_loop_in_constructor();  // 构造函数中尝试初始化（不持有锁）
-    void ensure_loop_initialized();       // 延迟初始化（I/O 时调用）
+    void ensure_loop_initialized();  // I/O 操作前调用，持有 GIL
     void start_workers();
     void worker_thread();
     void enqueue_task(std::function<void()> task);
 
     IORequest* make_req(size_t size, PyObject* future, ReqType type) override;
     void complete_error_inline(IORequest* req, DWORD err) override;
+    
+    // 缓存的配置值
+    size_t m_cached_buffer_size = 65536;
+    size_t m_cached_buffer_pool_max = 512;
+    unsigned m_cached_close_timeout_ms = 4000;
 };

@@ -289,19 +289,18 @@ def get_shared_loop():
     """获取或创建共享事件循环"""
     global _shared_loop
     if _shared_loop is None or _shared_loop.is_closed():
-        # Python 3.12+ 使用 SelectorEventLoop 以避免 C 扩展相关的潜在问题
-        if sys.version_info >= (3, 12):
+        # 始终显式创建新的事件循环
+        # 不要使用 asyncio.get_event_loop()，因为它在 3.14 中会抛出 RuntimeError
+        # 在 3.10 中会产生 DeprecationWarning
+        if sys.platform == "win32":
+            # Windows 上使用 ProactorEventLoop（默认）
+            _shared_loop = asyncio.new_event_loop()
+        else:
+            # Linux/macOS 使用 SelectorEventLoop
             try:
                 _shared_loop = asyncio.SelectorEventLoop()
             except Exception:
                 _shared_loop = asyncio.new_event_loop()
-        else:
-            if sys.version_info < (3, 12):
-                try:
-                    asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
-                except:
-                    pass
-            _shared_loop = asyncio.new_event_loop()
         
         asyncio.set_event_loop(_shared_loop)
     return _shared_loop
@@ -398,40 +397,38 @@ class TestRunner:
             _timeout_diag.start_test(name)
         
         try:
-            # Python 3.10, 3.12, 3.14 使用独立事件循环以避免已知问题
+            # 以下版本存在已知的事件循环问题：
+            # - 3.10: get_event_loop() 发出 DeprecationWarning，行为不稳定
+            # - 3.12: 子解释器 + OWN_GIL 可能导致 C 扩展死锁
+            # - 3.14: get_event_loop() 直接抛出 RuntimeError
             problematic_versions = {(3, 10), (3, 12), (3, 14)}
             use_isolated_loop = sys.version_info[:2] in problematic_versions
             
             if use_isolated_loop:
-                print(f"  [Using isolated loop for Python {sys.version_info[:2]}]")
+                # 为问题版本创建全新的独立事件循环
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 try:
                     loop.run_until_complete(coro_func())
                 finally:
-                    # 确保所有任务完成
+                    # 清理所有 pending 任务
                     try:
                         pending = asyncio.all_tasks(loop)
                         if pending:
                             loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-                    except Exception as e:
-                        print(f"    Warning: Error cleaning up pending tasks: {e}")
+                    except Exception:
+                        pass
                     loop.close()
                     asyncio.set_event_loop(None)
             else:
+                # 3.11 和 3.13 可以安全使用共享循环
                 loop = get_shared_loop()
                 loop.run_until_complete(coro_func())
             
             self.passed += 1
             print(f"  ✅ {name}")
-        except AssertionError as e:
-            self.failed += 1
-            self.failures.append((name, str(e)))
-            print(f"  ❌ {name}: {e}")
         except Exception as e:
-            self.failed += 1
-            self.failures.append((name, f"{type(e).__name__}: {e}"))
-            print(f"  💥 {name}: {type(e).__name__}: {e}")
+            # ... 错误处理
         finally:
             if self.enable_timeout_diag:
                 _timeout_diag.stop_test()

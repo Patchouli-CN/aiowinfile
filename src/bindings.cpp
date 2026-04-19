@@ -180,9 +180,19 @@ static py::dict py_get_backend_info() {
 NB_MODULE(_ayafileio, m) {
     m.doc() = "Cross-platform async file I/O module";
 
-    cache_globals();
+    // 首先缓存全局变量
+    try {
+        cache_globals();
+    } catch (const std::exception& e) {
+        printf("Warning: Failed to cache globals:", e.what());
+    }
+    
 #ifdef _WIN32
-    init_iocp();
+    try {
+        init_iocp();
+    } catch (const std::exception& e) {
+        printf("Warning: Failed to init IOCP:", e.what());
+    }
 #endif
 
     // 清理由 Python 层负责注册；在 C++ 层暴露一个可调用的 cleanup()

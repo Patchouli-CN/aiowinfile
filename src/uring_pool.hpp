@@ -177,7 +177,15 @@ private:
         if (m_cleanup_thread.joinable()) {
             m_cleanup_thread.join();
         }
-        cleanup();
+        // 直接清理 map，不再调用 stop_reaper（它们会在 UringInstance 析构时自然清理）
+        {
+            std::lock_guard<std::mutex> lk(m_mutex);
+            m_instances.clear();
+        }
+        {
+            std::lock_guard<std::mutex> lk(m_cleanup_mutex);
+            m_pending_cleanup.clear();
+        }
     }
     
     bool setup_instance(UringInstance* inst) {
@@ -261,7 +269,8 @@ private:
                     UR_LOG("UringPool::cleanup_loop: cleaning up expired instance");
                     // 从主 map 中移除
                     if (auto inst = it->instance.lock()) {
-                        inst->stop_reaper();
+                        // 注意：此时 reaper 应该已经退出了，我们只需清理 map 条目
+                        // 不要再调用 stop_reaper()，避免阻塞
                         std::lock_guard<std::mutex> lk2(m_mutex);
                         void* key = inst->loop;
                         auto map_it = m_instances.find(key);
@@ -269,6 +278,7 @@ private:
                             auto existing = map_it->second.lock();
                             if (!existing || existing.get() == inst.get()) {
                                 m_instances.erase(map_it);
+                                UR_LOG("UringPool::cleanup_loop: removed instance from map");
                             }
                         }
                     }

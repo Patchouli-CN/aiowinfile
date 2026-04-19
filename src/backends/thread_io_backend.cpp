@@ -5,10 +5,11 @@
 #include <sys/types.h>
 #include <errno.h>
 #include <algorithm>
+#include <cstring>
+#include <chrono>
 #include "../globals.hpp"
 #include "./utils/file_mode.hpp"
 #include <thread>
-#include <chrono>
 
 // 缓存在第一次成功获取事件循环后使用
 static PyObject   *g_cachedLoop       = nullptr;
@@ -61,7 +62,7 @@ ThreadIOBackend::ThreadIOBackend(const std::string &path, const std::string &mod
 
     m_fd = open(path.c_str(), flags, 0644);
     if (m_fd == -1) {
-        throw py::python_error();
+        throw_os_error("Failed to open file", path.c_str());
     }
 
     m_running.store(true, std::memory_order_release);
@@ -74,7 +75,7 @@ ThreadIOBackend::ThreadIOBackend(const std::string &path, const std::string &mod
         }
     }
     
-    // 关键：不在构造函数中启动工作线程或调用任何 Python API
+    // 不在构造函数中启动工作线程
 }
 
 ThreadIOBackend::~ThreadIOBackend() {
@@ -86,8 +87,7 @@ ThreadIOBackend::~ThreadIOBackend() {
 }
 
 void ThreadIOBackend::start_workers() {
-    // 注意：调用此函数时已经持有 m_loop_init_mtx 锁
-    if (!m_workers.empty()) return;  // 已经启动
+    if (!m_workers.empty()) return;
     
     m_workers.reserve(m_num_workers);
     for (unsigned i = 0; i < m_num_workers; ++i) {
@@ -96,10 +96,8 @@ void ThreadIOBackend::start_workers() {
 }
 
 void ThreadIOBackend::ensure_loop_initialized() {
-    // 快速路径
     if (m_loop_initialized) return;
     
-    // 先获取事件循环（持有 GIL，安全）
     PyObject* loop = PyObject_CallNoArgs(g_get_running_loop);
     if (!loop) {
         PyErr_Clear();
@@ -119,7 +117,6 @@ void ThreadIOBackend::ensure_loop_initialized() {
     Py_INCREF(m_create_future);
     m_loop_handle = g_cachedLoopHandle;
     
-    // 延迟启动工作线程
     start_workers();
     
     m_loop_initialized = true;
@@ -163,6 +160,7 @@ PyObject *ThreadIOBackend::read(int64_t size) {
         std::lock_guard<std::mutex> lk(m_posMtx);
         struct stat st;
         if (fstat(m_fd, &st) != 0) {
+            set_os_error("fstat failed");
             resolve_exc(future, g_OSError, errno, "fstat failed");
             return future;
         }
@@ -220,6 +218,7 @@ PyObject *ThreadIOBackend::write(Py_buffer *view) {
         if (m_appendMode) {
             struct stat st;
             if (fstat(m_fd, &st) != 0) {
+                set_os_error("fstat failed");
                 resolve_exc(future, g_OSError, errno, "fstat failed");
                 return future;
             }
@@ -260,6 +259,7 @@ PyObject *ThreadIOBackend::seek(int64_t offset, int whence) {
         } else if (whence == 2) {
             struct stat st;
             if (fstat(m_fd, &st) != 0) {
+                set_os_error("fstat failed");
                 resolve_exc(future, g_OSError, errno, "fstat failed");
                 return future;
             }
@@ -284,6 +284,7 @@ PyObject *ThreadIOBackend::flush() {
         return future;
     }
     if (fsync(m_fd) != 0) {
+        set_os_error("fsync failed");
         resolve_exc(future, g_OSError, errno, "fsync failed");
         return future;
     }
@@ -292,7 +293,6 @@ PyObject *ThreadIOBackend::flush() {
 }
 
 PyObject *ThreadIOBackend::close() {
-    // 如果从未初始化事件循环，直接关闭
     if (!m_loop_initialized) {
         close_impl();
         Py_RETURN_NONE;
@@ -309,14 +309,12 @@ void ThreadIOBackend::close_impl() {
     bool expected = true;
     if (!m_running.compare_exchange_strong(expected, false)) return;
     
-    // 停止工作线程
     {
         std::lock_guard<std::mutex> lk(m_queueMtx);
         m_stop = true;
     }
     m_cv.notify_all();
     
-    // 等待所有工作线程结束
     for (auto& t : m_workers) {
         if (t.joinable()) {
             t.join();
@@ -324,7 +322,6 @@ void ThreadIOBackend::close_impl() {
     }
     m_workers.clear();
     
-    // 等待 pending I/O 完成
     int elapsed = 0;
     int wait_time = 1;
     while (elapsed < static_cast<int>(m_cached_close_timeout_ms) && 
@@ -373,7 +370,7 @@ void ThreadIOBackend::complete_error(IORequest *req, DWORD err) {
     
     PyGILState_STATE gs = PyGILState_Ensure();
 
-    PyObject *exc_class = g_OSError;
+    PyObject *exc_class = map_posix_error(static_cast<int>(err));
     PyObject *exc = PyObject_CallFunction(exc_class, "is", static_cast<int>(err), "I/O operation failed");
 
     PyObject *set_fn = req->set_exception; 
@@ -410,7 +407,7 @@ IORequest *ThreadIOBackend::make_req(size_t size, PyObject *future, ReqType type
 
 void ThreadIOBackend::complete_error_inline(IORequest *req, DWORD err) {
     m_pending.fetch_sub(1, std::memory_order_relaxed);
-    PyObject *exc_class = g_OSError;
+    PyObject *exc_class = map_posix_error(static_cast<int>(err));
     PyObject *exc = PyObject_CallFunction(exc_class, "is", static_cast<int>(err), "I/O operation failed");
     PyObject *set_fn = req->set_exception; 
     req->set_exception = nullptr;

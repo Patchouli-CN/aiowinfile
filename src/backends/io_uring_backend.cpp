@@ -10,6 +10,8 @@
 #include <cerrno>
 #include <sys/eventfd.h>
 #include <cstring>
+#include <chrono>
+#include <thread>
 
 // ════════════════════════════════════════════════════════════════════════════
 // 全局缓存（线程安全）
@@ -65,7 +67,7 @@ IOUringBackend::IOUringBackend(const std::string& path, const std::string& mode)
     // 打开文件
     m_fd = open(path.c_str(), flags, 0644);
     if (m_fd == -1) {
-        throw py::python_error();
+        throw_os_error("Failed to open file", path.c_str());
     }
     
     // 缓存配置值（性能优化：避免频繁加锁读取配置）
@@ -150,7 +152,7 @@ void IOUringBackend::start_uring() {
     // 创建 eventfd 用于唤醒 reaper 线程
     m_event_fd = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
     if (m_event_fd == -1) {
-        throw std::runtime_error("Failed to create eventfd");
+        throw_os_error("Failed to create eventfd");
     }
     
     // 设置 io_uring
@@ -329,6 +331,7 @@ PyObject* IOUringBackend::read(int64_t size) {
         
         struct stat st;
         if (fstat(m_fd, &st) != 0) {
+            set_os_error("fstat failed");
             resolve_exc(future, g_OSError, errno, "fstat failed");
             return future;
         }
@@ -390,6 +393,7 @@ PyObject* IOUringBackend::write(Py_buffer* view) {
         if (m_appendMode) {
             struct stat st;
             if (fstat(m_fd, &st) != 0) {
+                set_os_error("fstat failed");
                 resolve_exc(future, g_OSError, errno, "fstat failed");
                 return future;
             }
@@ -426,6 +430,7 @@ PyObject* IOUringBackend::seek(int64_t offset, int whence) {
         } else if (whence == 2) {
             struct stat st;
             if (fstat(m_fd, &st) != 0) {
+                set_os_error("fstat failed");
                 resolve_exc(future, g_OSError, errno, "fstat failed");
                 return future;
             }
@@ -536,7 +541,7 @@ void IOUringBackend::complete_error(IORequest* req, DWORD err) {
     // 关键修复：在工作线程中获取 GIL
     PyGILState_STATE gs = PyGILState_Ensure();
     
-    PyObject* exc_class = g_OSError;
+    PyObject* exc_class = map_posix_error(static_cast<int>(err));
     PyObject* exc = PyObject_CallFunction(exc_class, "is", 
                                            static_cast<int>(err), 
                                            "I/O operation failed");
@@ -582,7 +587,7 @@ void IOUringBackend::complete_error_inline(IORequest* req, DWORD err) {
     // 注意：此函数在持有 GIL 的上下文中调用（同步错误）
     m_pending.fetch_sub(1, std::memory_order_relaxed);
     
-    PyObject* exc_class = g_OSError;
+    PyObject* exc_class = map_posix_error(static_cast<int>(err));
     PyObject* exc = PyObject_CallFunction(exc_class, "is", 
                                            static_cast<int>(err), 
                                            "I/O operation failed");

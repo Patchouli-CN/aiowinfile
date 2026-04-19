@@ -184,7 +184,7 @@ NB_MODULE(_ayafileio, m) {
     try {
         cache_globals();
     } catch (const std::exception& e) {
-        printf("Warning: Failed to cache globals:", e.what());
+        printf("Warning: Failed to cache globals: %s\n", e.what());
     }
     
 #ifdef _WIN32

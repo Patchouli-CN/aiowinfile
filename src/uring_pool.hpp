@@ -22,7 +22,7 @@ class IOUringBackend;
 
 #define THREAD_ID_HASH() std::hash<std::thread::id>{}(std::this_thread::get_id())
 
-// 全局状态（类似 iocp.cpp 中的全局变量）
+// 全局状态声明（定义在 uring_globals.cpp 中）
 extern std::atomic<bool> g_uring_running;
 extern std::mutex g_uring_instances_mtx;
 extern std::unordered_map<void*, std::weak_ptr<struct UringInstance>> g_uring_instances;
@@ -236,10 +236,9 @@ private:
     std::unordered_map<void*, std::weak_ptr<UringInstance>> m_instances;
 };
 
-// 全局变量定义（放在 .cpp 文件中，这里只是声明）
-inline std::atomic<bool> g_uring_running{false};
-inline std::mutex g_uring_instances_mtx;
-inline std::unordered_map<void*, std::weak_ptr<UringInstance>> g_uring_instances;
+extern std::atomic<bool> g_uring_running;
+extern std::mutex g_uring_instances_mtx;
+extern std::unordered_map<void*, std::weak_ptr<UringInstance>> g_uring_instances;
 
 // 便捷函数
 inline UringManager& uring_manager() {

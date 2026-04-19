@@ -13,14 +13,6 @@ using DWORD = uint32_t;
 using HANDLE = int;
 static constexpr HANDLE INVALID_HANDLE_VALUE = (HANDLE)-1;
 static inline void CloseHandle(HANDLE) { (void)0; }
-
-// 手动定义 __kernel_timespec，避免包含 <linux/time.h> 导致的定义冲突
-// 这个结构与 io_uring 使用的完全相同
-struct __kernel_timespec {
-    long long tv_sec;
-    long long tv_nsec;
-};
-
 #endif
 #include <atomic>
 

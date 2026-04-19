@@ -38,6 +38,9 @@ private:
     uint64_t m_filePos = 0;
     bool m_appendMode = false;
     
+    // 延迟初始化的事件循环相关成员
+    bool m_loop_initialized = false;
+    std::mutex m_loop_init_mtx;
     PyObject* m_loop = nullptr;
     PyObject* m_create_future = nullptr;
     LoopHandle* m_loop_handle = nullptr;
@@ -47,6 +50,7 @@ private:
     std::thread m_reaper_thread;
     std::atomic<bool> m_reaper_stop{false};
     
+    void ensure_loop_initialized();
     void reaper_loop();
     void submit_io(IORequest* req, int op, int fd, const void* buf, size_t len, off_t offset);
     bool setup_uring();

@@ -33,12 +33,7 @@ ThreadIOBackend::ThreadIOBackend(const std::string &path, const std::string &mod
     // 使用缓存的配置
     unsigned num_workers = cfg.io_worker_count();
 
-    PyObject *loop = PyObject_CallNoArgs(g_get_running_loop);
-    if (!loop) throw py::python_error();
-    refresh_loop_cache(loop);
-    m_loop          = loop;
-    m_create_future = g_cachedFutureFn; Py_INCREF(m_create_future);
-    m_loop_handle   = g_cachedLoopHandle;
+    // ⚠️ 延迟获取事件循环，不在构造函数中获取！
 
     int flags = O_RDONLY;
     ModeInfo mi;
@@ -87,8 +82,26 @@ ThreadIOBackend::ThreadIOBackend(const std::string &path, const std::string &mod
 
 ThreadIOBackend::~ThreadIOBackend() {
     close_impl();
-    Py_XDECREF(m_create_future);
-    Py_XDECREF(m_loop);
+    if (m_loop_initialized) {
+        Py_XDECREF(m_create_future);
+        Py_XDECREF(m_loop);
+    }
+}
+
+void ThreadIOBackend::ensure_loop_initialized() {
+    if (m_loop_initialized) return;
+    std::lock_guard<std::mutex> lk(m_loop_init_mtx);
+    if (m_loop_initialized) return;  // 双重检查
+    
+    PyObject *loop = PyObject_CallNoArgs(g_get_running_loop);
+    if (!loop) throw py::python_error();
+    refresh_loop_cache(loop);
+    m_loop = loop;
+    m_create_future = g_cachedFutureFn;
+    Py_INCREF(m_create_future);
+    m_loop_handle = g_cachedLoopHandle;
+    
+    m_loop_initialized = true;
 }
 
 void ThreadIOBackend::worker_thread() {
@@ -114,6 +127,8 @@ void ThreadIOBackend::enqueue_task(std::function<void()> task) {
 }
 
 PyObject *ThreadIOBackend::read(int64_t size) {
+    ensure_loop_initialized();
+    
     PyObject *future = PyObject_CallNoArgs(m_create_future);
     if (!future) return nullptr;
 
@@ -154,6 +169,8 @@ PyObject *ThreadIOBackend::read(int64_t size) {
 }
 
 PyObject *ThreadIOBackend::write(Py_buffer *view) {
+    ensure_loop_initialized();
+    
     size_t size = (size_t)view->len;
     PyObject *future = PyObject_CallNoArgs(m_create_future);
     if (!future) return nullptr;
@@ -201,6 +218,8 @@ PyObject *ThreadIOBackend::write(Py_buffer *view) {
 }
 
 PyObject *ThreadIOBackend::seek(int64_t offset, int whence) {
+    ensure_loop_initialized();
+    
     PyObject *future = PyObject_CallNoArgs(m_create_future);
     if (!future) return nullptr;
     {
@@ -225,6 +244,8 @@ PyObject *ThreadIOBackend::seek(int64_t offset, int whence) {
 }
 
 PyObject *ThreadIOBackend::flush() {
+    ensure_loop_initialized();
+    
     PyObject *future = PyObject_CallNoArgs(m_create_future);
     if (!future) return nullptr;
     if (!m_running.load(std::memory_order_relaxed) || m_fd == -1) {
@@ -240,6 +261,25 @@ PyObject *ThreadIOBackend::flush() {
 }
 
 PyObject *ThreadIOBackend::close() {
+    // close 可能在没有初始化事件循环的情况下调用
+    if (!m_loop_initialized) {
+        // 直接同步关闭
+        close_impl();
+        PyObject *future = PyObject_CallNoArgs(g_cachedFutureFn ? g_cachedFutureFn : 
+            []() {
+                // 如果连缓存都没有，尝试获取
+                PyObject *loop = PyObject_CallNoArgs(g_get_running_loop);
+                if (!loop) return (PyObject*)nullptr;
+                refresh_loop_cache(loop);
+                return g_cachedFutureFn;
+            }());
+        if (future) {
+            resolve_ok(future, Py_None);
+            return future;
+        }
+    }
+    
+    ensure_loop_initialized();
     PyObject *future = PyObject_CallNoArgs(m_create_future);
     if (!future) return nullptr;
     close_impl();

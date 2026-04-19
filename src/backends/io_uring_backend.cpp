@@ -24,14 +24,7 @@ static void refresh_loop_cache(PyObject* loop) {
 }
 
 IOUringBackend::IOUringBackend(const std::string& path, const std::string& mode) {
-    // 获取事件循环
-    PyObject* loop = PyObject_CallNoArgs(g_get_running_loop);
-    if (!loop) throw py::python_error();
-    refresh_loop_cache(loop);
-    m_loop = loop;
-    m_create_future = g_cachedFutureFn;
-    Py_INCREF(m_create_future);
-    m_loop_handle = g_cachedLoopHandle;
+    // ⚠️ 延迟获取事件循环，不在构造函数中获取！
 
     // 解析模式
     int flags = O_RDONLY;
@@ -65,7 +58,7 @@ IOUringBackend::IOUringBackend(const std::string& path, const std::string& mode)
     m_cached_io_uring_sqpoll = cfg.io_uring_sqpoll();
     
     // 创建 eventfd 用于唤醒 reaper 线程
-    m_event_fd = eventfd(0, EFD_NONBLOCK);
+    m_event_fd = ::eventfd(0, EFD_NONBLOCK);
     if (m_event_fd == -1) {
         ::close(m_fd);
         throw std::runtime_error("Failed to create eventfd");
@@ -92,8 +85,26 @@ IOUringBackend::IOUringBackend(const std::string& path, const std::string& mode)
 
 IOUringBackend::~IOUringBackend() {
     close_impl();
-    Py_XDECREF(m_create_future);
-    Py_XDECREF(m_loop);
+    if (m_loop_initialized) {
+        Py_XDECREF(m_create_future);
+        Py_XDECREF(m_loop);
+    }
+}
+
+void IOUringBackend::ensure_loop_initialized() {
+    if (m_loop_initialized) return;
+    std::lock_guard<std::mutex> lk(m_loop_init_mtx);
+    if (m_loop_initialized) return;  // 双重检查
+    
+    PyObject* loop = PyObject_CallNoArgs(g_get_running_loop);
+    if (!loop) throw py::python_error();
+    refresh_loop_cache(loop);
+    m_loop = loop;
+    m_create_future = g_cachedFutureFn;
+    Py_INCREF(m_create_future);
+    m_loop_handle = g_cachedLoopHandle;
+    
+    m_loop_initialized = true;
 }
 
 bool IOUringBackend::setup_uring() {
@@ -185,6 +196,8 @@ void IOUringBackend::submit_io(IORequest* req, int op, int fd,
 }
 
 PyObject* IOUringBackend::read(int64_t size) {
+    ensure_loop_initialized();
+    
     PyObject* future = PyObject_CallNoArgs(m_create_future);
     if (!future) return nullptr;
     
@@ -224,6 +237,8 @@ PyObject* IOUringBackend::read(int64_t size) {
 }
 
 PyObject* IOUringBackend::write(Py_buffer* view) {
+    ensure_loop_initialized();
+    
     size_t size = (size_t)view->len;
     PyObject* future = PyObject_CallNoArgs(m_create_future);
     if (!future) return nullptr;
@@ -265,6 +280,8 @@ PyObject* IOUringBackend::write(Py_buffer* view) {
 }
 
 PyObject* IOUringBackend::seek(int64_t offset, int whence) {
+    ensure_loop_initialized();
+    
     PyObject* future = PyObject_CallNoArgs(m_create_future);
     if (!future) return nullptr;
     
@@ -294,6 +311,8 @@ PyObject* IOUringBackend::seek(int64_t offset, int whence) {
 }
 
 PyObject* IOUringBackend::flush() {
+    ensure_loop_initialized();
+    
     PyObject* future = PyObject_CallNoArgs(m_create_future);
     if (!future) return nullptr;
     
@@ -314,6 +333,23 @@ PyObject* IOUringBackend::flush() {
 }
 
 PyObject* IOUringBackend::close() {
+    // close 可能在没有初始化事件循环的情况下调用
+    if (!m_loop_initialized) {
+        close_impl();
+        PyObject *future = PyObject_CallNoArgs(g_cachedFutureFn ? g_cachedFutureFn : 
+            []() {
+                PyObject *loop = PyObject_CallNoArgs(g_get_running_loop);
+                if (!loop) return (PyObject*)nullptr;
+                refresh_loop_cache(loop);
+                return g_cachedFutureFn;
+            }());
+        if (future) {
+            resolve_ok(future, Py_None);
+            return future;
+        }
+    }
+    
+    ensure_loop_initialized();
     PyObject* future = PyObject_CallNoArgs(m_create_future);
     if (!future) return nullptr;
     close_impl();

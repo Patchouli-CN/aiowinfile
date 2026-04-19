@@ -10,7 +10,8 @@
 #include <condition_variable>
 
 // ════════════════════════════════════════════════════════════════════════════
-// §8  Linux IO Backend (using epoll and threads)
+// §8  MacOS IO Backend (using epoll and threads)
+// 兄弟我求你，别再报错啦！
 // ════════════════════════════════════════════════════════════════════════════
 
 class ThreadIOBackend : public IOBackendBase {
@@ -35,6 +36,10 @@ private:
     std::mutex m_posMtx;
     uint64_t m_filePos = 0;
     bool m_appendMode = false;
+    
+    // 延迟初始化的事件循环相关成员
+    bool m_loop_initialized = false;
+    std::mutex m_loop_init_mtx;
     PyObject* m_loop = nullptr;
     PyObject* m_create_future = nullptr;
     LoopHandle* m_loop_handle = nullptr;
@@ -46,6 +51,7 @@ private:
     std::condition_variable m_cv;
     bool m_stop = false;
 
+    void ensure_loop_initialized();
     void worker_thread();
     void enqueue_task(std::function<void()> task);
 

@@ -45,8 +45,8 @@ ThreadIOBackend::ThreadIOBackend(const std::string &path, const std::string &mod
     bool appendMode = mi.appendMode;
 
     if (mi.hasW) { flags = O_WRONLY | O_CREAT | O_TRUNC; }
-    if (mi.hasA) { flags = O_WRONLY | O_CREAT | O_APPEND; }
-    if (mi.hasX) { flags = O_WRONLY | O_CREAT | O_EXCL; }
+    else if (mi.hasA) { flags = O_WRONLY | O_CREAT | O_APPEND; }
+    else if (mi.hasX) { flags = O_WRONLY | O_CREAT | O_EXCL; }
     if (mi.plus) { flags = O_RDWR; }
 
     m_appendMode = appendMode;
@@ -66,7 +66,7 @@ ThreadIOBackend::ThreadIOBackend(const std::string &path, const std::string &mod
         }
     }
 
-
+    // 只在需要时创建 worker 线程
     if (num_workers == 0) {
         unsigned hc = std::thread::hardware_concurrency();
         if (hc == 0) hc = 1;
@@ -94,7 +94,10 @@ void ThreadIOBackend::ensure_loop_initialized() {
     if (m_loop_initialized) return;  // 双重检查
     
     PyObject *loop = PyObject_CallNoArgs(g_get_running_loop);
-    if (!loop) throw py::python_error();
+    if (!loop) {
+        PyErr_Clear();  // 清除错误状态
+        throw std::runtime_error("No running event loop");
+    }
     refresh_loop_cache(loop);
     m_loop = loop;
     m_create_future = g_cachedFutureFn;
@@ -133,7 +136,7 @@ PyObject *ThreadIOBackend::read(int64_t size) {
     if (!future) return nullptr;
 
     if (!m_running.load(std::memory_order_relaxed)) {
-        resolve_exc(future, g_KeyboardInterrupt, 0, "interrupted");
+        resolve_exc(future, g_ValueError, 0, "I/O operation on closed file.");
         return future;
     }
 
@@ -147,7 +150,15 @@ PyObject *ThreadIOBackend::read(int64_t size) {
         }
         int64_t rem = (int64_t)st.st_size - (int64_t)m_filePos;
         if (rem <= 0) { resolve_bytes(future, nullptr, 0); return future; }
-        readSize = (size<0||(size_t)size>rem) ? (size_t)rem : (size_t)size;
+        
+        if (size < 0) {
+            readSize = static_cast<size_t>(rem);
+        } else {
+            size_t sz = static_cast<size_t>(size);
+            size_t r = static_cast<size_t>(rem);
+            readSize = (sz > r) ? r : sz;
+        }
+        
         if (readSize == 0) { resolve_bytes(future, nullptr, 0); return future; }
         offset = m_filePos;
         m_filePos += readSize;
@@ -159,7 +170,7 @@ PyObject *ThreadIOBackend::read(int64_t size) {
     enqueue_task([this, req, offset, readSize]() {
         ssize_t got = pread(m_fd, req->buf(), readSize, offset);
         if (got >= 0) {
-            complete_ok(req, got);
+            complete_ok(req, static_cast<size_t>(got));
         } else {
             complete_error(req, errno);
         }
@@ -171,12 +182,12 @@ PyObject *ThreadIOBackend::read(int64_t size) {
 PyObject *ThreadIOBackend::write(Py_buffer *view) {
     ensure_loop_initialized();
     
-    size_t size = (size_t)view->len;
+    size_t size = static_cast<size_t>(view->len);
     PyObject *future = PyObject_CallNoArgs(m_create_future);
     if (!future) return nullptr;
 
     if (!m_running.load(std::memory_order_relaxed)) {
-        resolve_exc(future, g_KeyboardInterrupt, 0, "interrupted");
+        resolve_exc(future, g_ValueError, 0, "I/O operation on closed file.");
         return future;
     }
     if (size == 0) {
@@ -194,7 +205,7 @@ PyObject *ThreadIOBackend::write(Py_buffer *view) {
                 resolve_exc(future, g_OSError, errno, "fstat failed");
                 return future;
             }
-            offset = st.st_size;
+            offset = static_cast<uint64_t>(st.st_size);
         } else {
             offset = m_filePos;
         }
@@ -206,9 +217,9 @@ PyObject *ThreadIOBackend::write(Py_buffer *view) {
 
     m_pending.fetch_add(1, std::memory_order_relaxed);
     enqueue_task([this, req, offset, size]() {
-        ssize_t wrote = pwrite(m_fd, req->buf(), size, offset);
+        ssize_t wrote = pwrite(m_fd, req->buf(), size, static_cast<off_t>(offset));
         if (wrote >= 0) {
-            complete_ok(req, wrote);
+            complete_ok(req, static_cast<size_t>(wrote));
         } else {
             complete_error(req, errno);
         }
@@ -224,15 +235,17 @@ PyObject *ThreadIOBackend::seek(int64_t offset, int whence) {
     if (!future) return nullptr;
     {
         std::lock_guard<std::mutex> lk(m_posMtx);
-        if (whence == 0) m_filePos = (uint64_t)offset;
-        else if (whence == 1) m_filePos = (uint64_t)((int64_t)m_filePos + offset);
-        else if (whence == 2) {
+        if (whence == 0) {
+            m_filePos = static_cast<uint64_t>(offset);
+        } else if (whence == 1) {
+            m_filePos = static_cast<uint64_t>(static_cast<int64_t>(m_filePos) + offset);
+        } else if (whence == 2) {
             struct stat st;
             if (fstat(m_fd, &st) != 0) {
                 resolve_exc(future, g_OSError, errno, "fstat failed");
                 return future;
             }
-            m_filePos = (uint64_t)((int64_t)st.st_size + offset);
+            m_filePos = static_cast<uint64_t>(static_cast<int64_t>(st.st_size) + offset);
         } else {
             resolve_exc(future, g_ValueError, 0, "Invalid whence value");
             return future;
@@ -265,29 +278,9 @@ PyObject *ThreadIOBackend::close() {
     if (!m_loop_initialized) {
         // 直接同步关闭
         close_impl();
-        
-        // 尝试获取事件循环创建 future
-        PyObject *loop = PyObject_CallNoArgs(g_get_running_loop);
-        PyObject *future = nullptr;
-        
-        if (loop) {
-            refresh_loop_cache(loop);
-            if (g_cachedFutureFn) {
-                future = PyObject_CallNoArgs(g_cachedFutureFn);
-            }
-            Py_DECREF(loop);
-        }
-        
-        if (future) {
-            resolve_ok(future, Py_None);
-            return future;
-        }
-        
-        // 如果无法创建 future，返回 None
         Py_RETURN_NONE;
     }
     
-    ensure_loop_initialized();
     PyObject *future = PyObject_CallNoArgs(m_create_future);
     if (!future) return nullptr;
     close_impl();
@@ -317,9 +310,14 @@ void ThreadIOBackend::complete_ok(IORequest *req, size_t bytes) {
     PyGILState_STATE gs = PyGILState_Ensure();
 
     PyObject *val = nullptr;
-    if      (req->type == ReqType::Read)  val = PyBytes_FromStringAndSize(req->buf(), bytes);
-    else if (req->type == ReqType::Write) val = PyLong_FromSsize_t((Py_ssize_t)bytes);
-    else                                  { val = Py_None; Py_INCREF(Py_None); }
+    if (req->type == ReqType::Read) {
+        val = PyBytes_FromStringAndSize(req->buf(), static_cast<Py_ssize_t>(bytes));
+    } else if (req->type == ReqType::Write) {
+        val = PyLong_FromSsize_t(static_cast<Py_ssize_t>(bytes));
+    } else {
+        val = Py_None;
+        Py_INCREF(Py_None);
+    }
 
     PyObject *set_fn = req->set_result; req->set_result = nullptr;
     Py_DECREF(req->future); req->future = nullptr;
@@ -335,8 +333,8 @@ void ThreadIOBackend::complete_error(IORequest *req, DWORD err) {
     m_pending.fetch_sub(1, std::memory_order_release);
     PyGILState_STATE gs = PyGILState_Ensure();
 
-    PyObject *exc_class = g_OSError; // map error
-    PyObject *exc = PyObject_CallFunction(exc_class, "is", (int)err, "I/O operation failed");
+    PyObject *exc_class = g_OSError;
+    PyObject *exc = PyObject_CallFunction(exc_class, "is", static_cast<int>(err), "I/O operation failed");
 
     PyObject *set_fn = req->set_exception; req->set_exception = nullptr;
     Py_DECREF(req->future); req->future = nullptr;
@@ -371,7 +369,7 @@ IORequest *ThreadIOBackend::make_req(size_t size, PyObject *future, ReqType type
 void ThreadIOBackend::complete_error_inline(IORequest *req, DWORD err) {
     m_pending.fetch_sub(1, std::memory_order_relaxed);
     PyObject *exc_class = g_OSError;
-    PyObject *exc = PyObject_CallFunction(exc_class, "is", (int)err, "I/O operation failed");
+    PyObject *exc = PyObject_CallFunction(exc_class, "is", static_cast<int>(err), "I/O operation failed");
     PyObject *set_fn = req->set_exception; req->set_exception = nullptr;
     PyObject *r = PyObject_CallFunctionObjArgs(set_fn, exc, nullptr);
     Py_XDECREF(r); Py_DECREF(set_fn); Py_DECREF(exc);

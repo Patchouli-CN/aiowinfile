@@ -89,25 +89,25 @@ _DEFAULT_READLINE_BUF = 65536  # 64 KB – much faster than 4 KB for large files
 
 def configure(options: dict) -> None:
     """统一配置 ayafileio。
-    
-    Args:
-        options: 配置字典，支持以下键:
-            - handle_pool_max_per_key (int): 每个文件最大缓存句柄数 (Windows, 默认 64)
-            - handle_pool_max_total (int): 全局最大缓存句柄数 (Windows, 默认 2048)
-            - io_worker_count (int): I/O 工作线程数，0=自动 (默认 0, 最大 128)
-            - buffer_pool_max (int): 最大缓存缓冲区数 (默认 512)
-            - buffer_size (int): 单个缓冲区大小，字节 (默认 65536)
-            - close_timeout_ms (int): 关闭时等待 pending I/O 的最大毫秒数 (默认 4000)
-            - io_uring_queue_depth (int): io_uring 队列深度 (Linux, 默认 256)
-            - io_uring_sqpoll (bool): 是否启用 SQPOLL 模式 (Linux, 默认 False)
-            - enable_debug_log (bool): 是否启用调试日志 (默认 False)
+    options: 配置字典，支持以下键:
+        - handle_pool_max_per_key (int): 每个文件最大缓存句柄数 (Windows, 默认 64)
+        - handle_pool_max_total (int): 全局最大缓存句柄数 (Windows, 默认 2048)
+        - io_worker_count (int): I/O 工作线程数，0=自动 (默认 0, 最大 128)
+        - buffer_pool_max (int): 最大缓存缓冲区数 (默认 512)
+        - buffer_size (int): 单个缓冲区大小，字节 (默认 65536)
+        - close_timeout_ms (int): 关闭时等待 pending I/O 的最大毫秒数 (默认 4000)
+        - io_uring_queue_depth (int): io_uring 队列深度 (Linux, 默认 256)
+        - io_uring_sqpoll (bool): 是否启用 SQPOLL 模式 (Linux, 默认 False)
+        - enable_debug_log (bool): 是否启用调试日志 (默认 False)
     
     Example:
-        >>> ayafileio.configure({
-        ...     "io_worker_count": 8,
-        ...     "buffer_size": 131072,
-        ...     "close_timeout_ms": 2000,
-        ... })
+    ```python
+        ayafileio.configure({
+            "io_worker_count": 8,
+            "buffer_size": 131072,
+            "close_timeout_ms": 2000,
+        })
+    ```
     """
     _configure(options)
 

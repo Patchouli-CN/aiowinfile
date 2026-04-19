@@ -11,6 +11,7 @@
 #include <condition_variable>
 #include <vector>
 #include <Python.h>
+#include "debug_log.hpp"
 
 // ════════════════════════════════════════════════════════════════════════════
 // io_uring 实例池 - 复用 io_uring，避免频繁创建/销毁
@@ -44,11 +45,13 @@ struct UringInstance {
     
     void stop_reaper() {
         if (!running.exchange(false)) return;
+        UR_LOG("UringInstance::stop_reaper: stopping reaper, inst=%p", (void*)this);
         reaper_stop.store(true, std::memory_order_release);
         
         // 等待 reaper 线程结束
         if (reaper_thread.joinable()) {
             reaper_thread.join();
+            UR_LOG("UringInstance::stop_reaper: reaper thread joined");
         }
     }
     
@@ -74,15 +77,17 @@ public:
         
         // 使用 loop 指针作为 key
         void* key = loop;
+        UR_LOG("UringPool::acquire: loop=%p, key=%p", (void*)loop, key);
         
         auto it = m_instances.find(key);
         if (it != m_instances.end()) {
             auto inst = it->second.lock();
             if (inst && inst->running.load(std::memory_order_acquire)) {
                 inst->add_ref();
+                UR_LOG("UringPool::acquire: found existing instance=%p, ref=%d", (void*)inst.get(), inst->get_ref());
                 return inst;
             }
-            // 实例已失效，移除
+            UR_LOG("UringPool::acquire: existing instance expired, removing");
             m_instances.erase(it);
         }
         
@@ -97,11 +102,13 @@ public:
         
         if (!setup_instance(inst.get())) {
             Py_DECREF(loop);
+            UR_LOG("UringPool::acquire: setup_instance failed");
             return nullptr;
         }
         
         inst->add_ref();
         m_instances[key] = inst;
+        UR_LOG("UringPool::acquire: created new instance=%p, queue_depth=%u", (void*)inst.get(), queue_depth);
         
         return inst;
     }
@@ -111,9 +118,11 @@ public:
         if (!inst) return;
         
         inst->release();
+        int ref = inst->get_ref();
+        UR_LOG("UringPool::release: inst=%p, ref=%d", (void*)inst.get(), ref);
         
         // 如果引用计数为 0，延迟清理
-        if (inst->get_ref() == 0) {
+        if (ref == 0) {
             schedule_cleanup(inst);
         }
     }
@@ -121,6 +130,7 @@ public:
     // 强制清理所有实例
     void cleanup() {
         std::lock_guard<std::mutex> lk(m_mutex);
+        UR_LOG("UringPool::cleanup: cleaning up all instances");
         for (auto& pair : m_instances) {
             if (auto inst = pair.second.lock()) {
                 inst->stop_reaper();
@@ -162,14 +172,16 @@ private:
         
         int ret = io_uring_queue_init(inst->queue_depth, &inst->ring, actual_flags);
         if (ret < 0) {
+            UR_LOG("UringPool::setup_instance: io_uring_queue_init failed, ret=%d, errno=%d", ret, errno);
             return false;
         }
-        
+        UR_LOG("UringPool::setup_instance: success, ring_fd=%d", inst->ring.ring_fd);
         return true;
     }
     
     void schedule_cleanup(std::shared_ptr<UringInstance> inst) {
         std::lock_guard<std::mutex> lk(m_cleanup_mutex);
+        UR_LOG("UringPool::schedule_cleanup: scheduling cleanup for inst=%p", (void*)inst.get());
         // 延迟 5 秒后清理
         m_pending_cleanup.push_back({
             std::chrono::steady_clock::now() + std::chrono::seconds(5),
@@ -179,6 +191,7 @@ private:
     }
     
     void cleanup_loop() {
+        UR_LOG("UringPool::cleanup_loop: started");
         while (!m_stop_cleanup) {
             std::unique_lock<std::mutex> lk(m_cleanup_mutex);
             m_cv.wait_for(lk, std::chrono::seconds(1), [this] {
@@ -191,6 +204,7 @@ private:
             auto it = m_pending_cleanup.begin();
             while (it != m_pending_cleanup.end()) {
                 if (it->expiry <= now) {
+                    UR_LOG("UringPool::cleanup_loop: cleaning up expired instance");
                     // 从主 map 中移除
                     if (auto inst = it->instance.lock()) {
                         inst->stop_reaper();
@@ -210,6 +224,7 @@ private:
                 }
             }
         }
+        UR_LOG("UringPool::cleanup_loop: exiting");
     }
     
     struct CleanupEntry {

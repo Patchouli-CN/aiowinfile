@@ -10,10 +10,6 @@
 #include <mutex>
 #include <unordered_map>
 
-// ════════════════════════════════════════════════════════════════════════════
-// §9  Linux io_uring Backend - 真异步，高性能
-// ════════════════════════════════════════════════════════════════════════════
-
 class IOUringBackend : public IOBackendBase {
 public:
     IOUringBackend(const std::string& path, const std::string& mode);
@@ -31,21 +27,20 @@ public:
 
 private:
     int m_fd = -1;
-    int m_event_fd = -1;  // 用于唤醒 reaper 线程
+    int m_event_fd = -1;
     std::atomic<bool> m_running{false};
     std::atomic<long> m_pending{0};
     std::mutex m_posMtx;
     uint64_t m_filePos = 0;
     bool m_appendMode = false;
     
-    // 延迟初始化的事件循环相关成员
+    // 延迟初始化
     bool m_loop_initialized = false;
     std::mutex m_loop_init_mtx;
     PyObject* m_loop = nullptr;
     PyObject* m_create_future = nullptr;
     LoopHandle* m_loop_handle = nullptr;
     
-    // io_uring 相关
     struct io_uring m_ring{};
     std::thread m_reaper_thread;
     std::atomic<bool> m_reaper_stop{false};
@@ -59,7 +54,6 @@ private:
     IORequest* make_req(size_t size, PyObject* future, ReqType type) override;
     void complete_error_inline(IORequest* req, DWORD err) override;
     
-    // 缓存的 io_uring 配置（避免频繁加锁）
     unsigned m_cached_io_uring_queue_depth = 256;
     unsigned m_cached_io_uring_flags = 0;
     bool m_cached_io_uring_sqpoll = false;

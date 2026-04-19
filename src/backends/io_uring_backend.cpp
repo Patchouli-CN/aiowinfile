@@ -24,8 +24,6 @@ static void refresh_loop_cache(PyObject* loop) {
 }
 
 IOUringBackend::IOUringBackend(const std::string& path, const std::string& mode) {
-    // ⚠️ 延迟获取事件循环，不在构造函数中获取！
-
     // 解析模式
     int flags = O_RDONLY;
     ModeInfo mi;
@@ -94,7 +92,7 @@ IOUringBackend::~IOUringBackend() {
 void IOUringBackend::ensure_loop_initialized() {
     if (m_loop_initialized) return;
     std::lock_guard<std::mutex> lk(m_loop_init_mtx);
-    if (m_loop_initialized) return;  // 双重检查
+    if (m_loop_initialized) return;
     
     PyObject* loop = PyObject_CallNoArgs(g_get_running_loop);
     if (!loop) throw py::python_error();
@@ -108,10 +106,7 @@ void IOUringBackend::ensure_loop_initialized() {
 }
 
 bool IOUringBackend::setup_uring() {
-    // 使用缓存的配置值
     unsigned flags = m_cached_io_uring_flags;
-    
-    // 如果启用 SQPOLL
     if (m_cached_io_uring_sqpoll) {
         flags |= IORING_SETUP_SQPOLL;
     }
@@ -127,9 +122,10 @@ bool IOUringBackend::setup_uring() {
 void IOUringBackend::teardown_uring() {
     m_reaper_stop.store(true);
     
-    // 唤醒 reaper 线程：向 eventfd 写入数据
+    // 唤醒 reaper 线程
     uint64_t val = 1;
-    ::write(m_event_fd, &val, sizeof(val));
+    ssize_t written = ::write(m_event_fd, &val, sizeof(val));
+    (void)written;  // 忽略返回值
     
     if (m_reaper_thread.joinable()) {
         m_reaper_thread.join();
@@ -143,11 +139,11 @@ void IOUringBackend::teardown_uring() {
 }
 
 void IOUringBackend::reaper_loop() {
-    // 将 eventfd 添加到 io_uring 中，用于唤醒
+    // 将 eventfd 添加到 io_uring 中
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (sqe) {
         io_uring_prep_read(sqe, m_event_fd, nullptr, 0, 0);
-        io_uring_sqe_set_data(sqe, nullptr);  // 唤醒请求不需要关联数据
+        io_uring_sqe_set_data(sqe, nullptr);
         io_uring_submit(&m_ring);
     }
     
@@ -168,7 +164,7 @@ void IOUringBackend::reaper_loop() {
                 complete_error(req, -cqe->res);
             }
         } else {
-            // 这是 eventfd 的唤醒事件，重新提交
+            // eventfd 唤醒事件，重新提交
             if (!m_reaper_stop.load(std::memory_order_relaxed)) {
                 sqe = io_uring_get_sqe(&m_ring);
                 if (sqe) {
@@ -333,20 +329,19 @@ PyObject* IOUringBackend::flush() {
 }
 
 PyObject* IOUringBackend::close() {
-    // close 可能在没有初始化事件循环的情况下调用
     if (!m_loop_initialized) {
         close_impl();
-        PyObject *future = PyObject_CallNoArgs(g_cachedFutureFn ? g_cachedFutureFn : 
-            []() {
-                PyObject *loop = PyObject_CallNoArgs(g_get_running_loop);
-                if (!loop) return (PyObject*)nullptr;
-                refresh_loop_cache(loop);
-                return g_cachedFutureFn;
-            }());
-        if (future) {
-            resolve_ok(future, Py_None);
-            return future;
+        // 创建一个临时 future 返回
+        PyObject* loop = PyObject_CallNoArgs(g_get_running_loop);
+        if (loop) {
+            refresh_loop_cache(loop);
+            PyObject* future = PyObject_CallNoArgs(g_cachedFutureFn);
+            if (future) {
+                resolve_ok(future, Py_None);
+                return future;
+            }
         }
+        Py_RETURN_NONE;
     }
     
     ensure_loop_initialized();
@@ -427,7 +422,6 @@ IORequest* IOUringBackend::make_req(size_t size, PyObject* future, ReqType type)
     req->reqSize = size;
     req->type = type;
     
-    // 使用基类缓存的缓冲区大小（无锁访问）
     if (size <= m_cached_buffer_size) {
         req->poolBuf = pool_acquire();
     } else {

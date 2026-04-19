@@ -109,6 +109,7 @@ else()
         message(STATUS "Adding io_uring backend (Linux + liburing)")
         list(APPEND SOURCES
             src/backends/io_uring_backend.cpp
+            src/uring_globals.cpp
         )
     else()
         message(STATUS "Building for ${CMAKE_SYSTEM_NAME} (Thread Pool Backend only)")

@@ -7,6 +7,7 @@
 #endif
 #ifdef HAVE_IO_URING
 #include <liburing.h>
+#include "uring_pool.hpp"
 #endif
 #include "file_handle.hpp"
 #include "handle_pool.hpp"
@@ -197,14 +198,18 @@ NB_MODULE(_ayafileio, m) {
 
     // 清理由 Python 层负责注册；在 C++ 层暴露一个可调用的 cleanup()
     m.def("cleanup", []() {
-        // 总是先尝试 drain handle pool（跨平台）
-        handle_pool_drain();
-#ifdef _WIN32
-        // Windows 特有：关闭所有打开文件并停止 IOCP
-        close_all_files();
-        shutdown_iocp();
+    // 总是先尝试 drain handle pool（跨平台）
+    handle_pool_drain();
+#ifdef HAVE_IO_URING
+    // Linux 特有：清理所有 io_uring 实例
+    uring_cleanup_all();
 #endif
-    }, "Perform native cleanup (safe to call from Python atexit)");
+#ifdef _WIN32
+    // Windows 特有：关闭所有打开文件并停止 IOCP
+    close_all_files();
+    shutdown_iocp();
+#endif
+}, "Perform native cleanup (safe to call from Python atexit)");
 
     // AsyncFile 类
     py::class_<PyAsyncFile>(m, "AsyncFile")

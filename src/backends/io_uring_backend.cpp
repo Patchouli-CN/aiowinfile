@@ -16,7 +16,7 @@
 #include <thread>
 
 // ════════════════════════════════════════════════════════════════════════════
-// 全局缓存
+// 全局缓存（类似 Windows 后端的 g_cachedLoop 等）
 // ════════════════════════════════════════════════════════════════════════════
 
 static PyObject*   g_cachedLoop       = nullptr;
@@ -67,10 +67,12 @@ IOUringBackend::IOUringBackend(const std::string& path, const std::string& mode)
     
     m_fd = open(path.c_str(), flags, 0644);
     if (m_fd == -1) {
-        UR_LOG("IOUringBackend open failed: path=%s, mode=%s, errno=%d", path.c_str(), mode.c_str(), errno);
+        UR_LOG("IOUringBackend open failed: path=%s, mode=%s, errno=%d", 
+               path.c_str(), mode.c_str(), errno);
         throw_os_error("Failed to open file", path.c_str());
     }
-    UR_LOG("IOUringBackend created: this=%p, fd=%d, path=%s, mode=%s", (void*)this, m_fd, path.c_str(), mode.c_str());
+    UR_LOG("IOUringBackend created: this=%p, fd=%d, path=%s, mode=%s", 
+           (void*)this, m_fd, path.c_str(), mode.c_str());
     
     auto& cfg = ayafileio::config();
     m_cached_buffer_size = cfg.buffer_size();
@@ -106,7 +108,6 @@ void IOUringBackend::ensure_loop_initialized() {
     if (m_loop_initialized) return;
     UR_LOG("ensure_loop_initialized start: this=%p", (void*)this);
 
-    // 获取当前运行中的事件循环
     PyObject* loop = PyObject_CallNoArgs(g_get_running_loop);
     if (!loop) {
         PyErr_Clear();
@@ -122,7 +123,6 @@ void IOUringBackend::ensure_loop_initialized() {
         return;
     }
 
-    // 刷新全局缓存（loop、create_future 等）
     refresh_loop_cache(loop);
     m_loop = loop;
     Py_INCREF(m_loop);
@@ -130,9 +130,8 @@ void IOUringBackend::ensure_loop_initialized() {
     Py_INCREF(m_create_future);
     m_loop_handle = g_cachedLoopHandle;
 
-    // 从配置中获取参数
     auto& cfg = ayafileio::config();
-    m_uring = UringPool::instance().acquire(
+    m_uring = uring_manager().acquire(
         m_loop,
         &IOUringBackend::reaper_loop_entry,
         cfg.io_uring_queue_depth(),
@@ -147,12 +146,9 @@ void IOUringBackend::ensure_loop_initialized() {
     UR_LOG("ensure_loop_initialized: acquired uring instance=%p, queue_depth=%u",
            (void*)m_uring.get(), cfg.io_uring_queue_depth());
 
-    // 启动 reaper 线程（如果尚未运行）
-    if (!m_uring->reaper_thread.joinable()) {
-        m_uring->running.store(true, std::memory_order_release);
-        m_uring->reaper_thread = std::thread(&IOUringBackend::reaper_loop_entry, m_uring.get());
-        UR_LOG("ensure_loop_initialized: started reaper thread for uring=%p", (void*)m_uring.get());
-    }
+    // 启动 reaper 线程
+    uring_manager().start_reaper(m_uring);
+    UR_LOG("ensure_loop_initialized: started reaper thread for uring=%p", (void*)m_uring.get());
 
     m_loop_initialized = true;
     UR_LOG("ensure_loop_initialized done: this=%p", (void*)this);
@@ -167,42 +163,21 @@ void IOUringBackend::reaper_loop_entry(UringInstance* inst) {
            (void*)inst, inst->ring.ring_fd, inst->event_fd);
     
     struct io_uring_cqe* cqe = nullptr;
-    int idle_iterations = 0;
-    int wait_errors = 0;
     
     while (!inst->reaper_stop.load(std::memory_order_acquire)) {
-        UR_LOG("reaper_loop: waiting for CQE, stop=%d", inst->reaper_stop.load());
-        
-        // 阻塞等待任意一个 CQE（包括 eventfd 可读事件或 I/O 完成事件）
         int ret = io_uring_wait_cqe(&inst->ring, &cqe);
         
-        UR_LOG("reaper_loop: io_uring_wait_cqe returned ret=%d", ret);
-        
-        if (ret < 0) {
-            if (ret == -EINTR) {
-                UR_LOG("reaper_loop: interrupted by signal, continuing");
-                continue;  // 被信号中断，继续等待
-            }
-            wait_errors++;
-            UR_LOG("reaper_loop: io_uring_wait_cqe error ret=%d, errno=%d, error_count=%d", 
-                   ret, errno, wait_errors);
-            
-            // 如果连续出错超过 10 次，强制退出
-            if (wait_errors > 10) {
-                UR_LOG("reaper_loop: too many errors, forcing exit");
-                break;
-            }
+        if (ret == -EINTR) {
             continue;
         }
         
-        wait_errors = 0;  // 重置错误计数
+        if (ret < 0) {
+            UR_LOG("reaper_loop: io_uring_wait_cqe error ret=%d, exiting", ret);
+            break;
+        }
         
-        // 处理所有可用 CQE
         unsigned head;
         unsigned count = 0;
-        bool got_eventfd = false;
-        
-        UR_LOG("reaper_loop: processing CQEs...");
         
         io_uring_for_each_cqe(&inst->ring, head, cqe) {
             IORequest* req = static_cast<IORequest*>(io_uring_cqe_get_data(cqe));
@@ -216,23 +191,14 @@ void IOUringBackend::reaper_loop_entry(UringInstance* inst) {
                     file->complete_error(req, static_cast<DWORD>(-cqe->res));
                 }
             } else {
-                // data 为空的 CQE 是我们的 eventfd poll 完成事件
-                got_eventfd = true;
-                UR_LOG("reaper got eventfd wakeup, cqe->res=%d", cqe->res);
-                
-                // 如果是 eventfd 触发，需要重新提交 poll 请求以继续监听
+                // eventfd 唤醒，重新提交 poll
+                UR_LOG("reaper got eventfd wakeup");
                 if (!inst->reaper_stop.load(std::memory_order_acquire)) {
                     struct io_uring_sqe* sqe = io_uring_get_sqe(&inst->ring);
                     if (sqe) {
                         io_uring_prep_poll_add(sqe, inst->event_fd, POLLIN);
                         io_uring_sqe_set_data(sqe, nullptr);
-                        int submitted = io_uring_submit(&inst->ring);
-                        UR_LOG("reaper_loop: resubmitted eventfd poll, submitted=%d", submitted);
-                        if (submitted < 0) {
-                            UR_LOG("reaper_loop: failed to resubmit eventfd poll, ret=%d", submitted);
-                        }
-                    } else {
-                        UR_LOG("reaper_loop: failed to get sqe for eventfd poll resubmit");
+                        io_uring_submit(&inst->ring);
                     }
                 }
             }
@@ -241,16 +207,10 @@ void IOUringBackend::reaper_loop_entry(UringInstance* inst) {
         
         if (count > 0) {
             io_uring_cq_advance(&inst->ring, count);
-            UR_LOG("reaper processed %u cqes (eventfd=%d)", count, got_eventfd);
-        }
-        
-        // 如果收到了 eventfd 且 reaper_stop 已设置，循环将自然退出
-        if (got_eventfd && inst->reaper_stop.load(std::memory_order_acquire)) {
-            UR_LOG("reaper_loop: got eventfd and stop flag set, exiting");
         }
     }
     
-    UR_LOG("reaper_loop_entry exit: inst=%p, stop=%d", (void*)inst, inst->reaper_stop.load());
+    UR_LOG("reaper_loop_entry exit: inst=%p", (void*)inst);
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -350,8 +310,8 @@ PyObject* IOUringBackend::read(int64_t size) {
     
     IORequest* req = make_req(readSize, future, ReqType::Read);
     m_pending.fetch_add(1, std::memory_order_relaxed);
-    UR_LOG("read: this=%p, size=%ld, readSize=%zu, offset=%lu, req=%p, pending_before=%ld",
-           (void*)this, size, readSize, offset, (void*)req, m_pending.load() - 1);
+    UR_LOG("read: this=%p, size=%ld, readSize=%zu, offset=%lu, req=%p",
+           (void*)this, size, readSize, offset, (void*)req);
     submit_io(req, IORING_OP_READ, m_fd, req->buf(), readSize, static_cast<off_t>(offset));
     
     return future;
@@ -404,8 +364,8 @@ PyObject* IOUringBackend::write(Py_buffer* view) {
     std::memcpy(req->buf(), view->buf, size);
     
     m_pending.fetch_add(1, std::memory_order_relaxed);
-    UR_LOG("write: this=%p, size=%zu, offset=%lu, req=%p, pending_before=%ld",
-           (void*)this, size, offset, (void*)req, m_pending.load() - 1);
+    UR_LOG("write: this=%p, size=%zu, offset=%lu, req=%p",
+           (void*)this, size, offset, (void*)req);
     submit_io(req, IORING_OP_WRITE, m_fd, req->buf(), size, static_cast<off_t>(offset));
     
     return future;
@@ -442,7 +402,8 @@ PyObject* IOUringBackend::seek(int64_t offset, int whence) {
         }
     }
     
-    UR_LOG("seek: this=%p, offset=%ld, whence=%d, new_pos=%lu", (void*)this, offset, whence, m_filePos);
+    UR_LOG("seek: this=%p, offset=%ld, whence=%d, new_pos=%lu", 
+           (void*)this, offset, whence, m_filePos);
     PyObject* pos = PyLong_FromUnsignedLongLong(m_filePos);
     resolve_ok(future, pos);
     Py_DECREF(pos);
@@ -474,6 +435,7 @@ PyObject* IOUringBackend::flush() {
 
 PyObject* IOUringBackend::close() {
     UR_LOG("close: this=%p, loop_initialized=%d", (void*)this, m_loop_initialized);
+    
     if (!m_loop_initialized) {
         PyObject* loop = PyObject_CallNoArgs(g_get_running_loop);
         if (!loop) {
@@ -510,9 +472,10 @@ void IOUringBackend::close_impl() {
         return;
     }
     
-    UR_LOG("close_impl start: this=%p, fd=%d, pending=%ld", (void*)this, m_fd, m_pending.load());
+    UR_LOG("close_impl start: this=%p, fd=%d, pending=%ld", 
+           (void*)this, m_fd, m_pending.load());
     
-    // 1. 首先停止 reaper 线程（通过 UringInstance）
+    // 1. 停止 reaper 线程
     if (m_uring) {
         UR_LOG("close_impl: stopping reaper for uring=%p", (void*)m_uring.get());
         m_uring->stop_reaper();
@@ -524,7 +487,8 @@ void IOUringBackend::close_impl() {
     while (elapsed < static_cast<int>(m_cached_close_timeout_ms) && 
            m_pending.load(std::memory_order_acquire) > 0) {
         if (elapsed % 100 == 0) {
-            UR_LOG("close_impl: waiting for pending I/O, elapsed=%d ms, pending=%ld", elapsed, m_pending.load());
+            UR_LOG("close_impl: waiting for pending I/O, elapsed=%d ms, pending=%ld", 
+                   elapsed, m_pending.load());
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(wait_time));
         elapsed += wait_time;
@@ -532,13 +496,13 @@ void IOUringBackend::close_impl() {
     }
     
     if (m_pending.load() > 0) {
-        UR_LOG("close_impl: timeout waiting for pending I/O, forcing close. pending=%ld", m_pending.load());
+        UR_LOG("close_impl: timeout waiting for pending I/O, forcing close. pending=%ld", 
+               m_pending.load());
     }
     
-    // 3. 释放 io_uring 实例引用
+    // 3. 释放 io_uring 实例引用（实例保留在管理器中供复用）
     if (m_uring) {
         UR_LOG("close_impl: releasing uring instance %p", (void*)m_uring.get());
-        UringPool::instance().release(m_uring);
         m_uring.reset();
     }
     

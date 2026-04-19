@@ -11,6 +11,8 @@
 #include <condition_variable>
 #include <vector>
 #include <Python.h>
+#include <sys/eventfd.h>
+#include <unistd.h>
 #include "debug_log.hpp"
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -27,6 +29,7 @@ struct UringInstance {
     std::thread reaper_thread;
     std::atomic<bool> reaper_stop{false};
     PyObject* loop = nullptr;  // 关联的事件循环（强引用）
+    int event_fd = -1;         // 用于唤醒 reaper 线程的 eventfd
     
     // 配置参数
     unsigned queue_depth = 256;
@@ -40,6 +43,10 @@ struct UringInstance {
     ~UringInstance() {
         stop_reaper();
         io_uring_queue_exit(&ring);
+        if (event_fd != -1) {
+            ::close(event_fd);
+            event_fd = -1;
+        }
         Py_XDECREF(loop);
     }
     
@@ -48,15 +55,15 @@ struct UringInstance {
         UR_LOG("UringInstance::stop_reaper: stopping reaper, inst=%p", (void*)this);
         reaper_stop.store(true, std::memory_order_release);
         
-        // 向 io_uring 提交一个 NOP 以唤醒 reaper 线程
-        struct io_uring_sqe* sqe = io_uring_get_sqe(&ring);
-        if (sqe) {
-            io_uring_prep_nop(sqe);
-            io_uring_sqe_set_data(sqe, nullptr);
-            int submitted = io_uring_submit(&ring);
-            UR_LOG("UringInstance::stop_reaper: submitted NOP to wake reaper, submitted=%d", submitted);
-        } else {
-            UR_LOG("UringInstance::stop_reaper: failed to get SQE for NOP");
+        // 向 eventfd 写入 1 字节，强制唤醒 reaper 线程
+        if (event_fd != -1) {
+            uint64_t val = 1;
+            ssize_t ret = write(event_fd, &val, sizeof(val));
+            if (ret != sizeof(val)) {
+                UR_LOG("UringInstance::stop_reaper: write to eventfd failed, ret=%zd, errno=%d", ret, errno);
+            } else {
+                UR_LOG("UringInstance::stop_reaper: wrote to eventfd to wake reaper");
+            }
         }
         
         // 等待 reaper 线程结束
@@ -170,6 +177,14 @@ private:
     }
     
     bool setup_instance(UringInstance* inst) {
+        // 创建 eventfd (非阻塞)
+        inst->event_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+        if (inst->event_fd == -1) {
+            UR_LOG("UringPool::setup_instance: eventfd failed, errno=%d", errno);
+            return false;
+        }
+        UR_LOG("UringPool::setup_instance: eventfd created, fd=%d", inst->event_fd);
+        
         unsigned actual_flags = inst->flags;
         if (inst->sqpoll) {
             actual_flags |= IORING_SETUP_SQPOLL;
@@ -184,9 +199,33 @@ private:
         int ret = io_uring_queue_init(inst->queue_depth, &inst->ring, actual_flags);
         if (ret < 0) {
             UR_LOG("UringPool::setup_instance: io_uring_queue_init failed, ret=%d, errno=%d", ret, errno);
+            ::close(inst->event_fd);
+            inst->event_fd = -1;
             return false;
         }
         UR_LOG("UringPool::setup_instance: success, ring_fd=%d", inst->ring.ring_fd);
+        
+        // 向 io_uring 提交一个监听 eventfd 可读事件的 poll 请求
+        struct io_uring_sqe* sqe = io_uring_get_sqe(&inst->ring);
+        if (!sqe) {
+            UR_LOG("UringPool::setup_instance: failed to get sqe for eventfd poll");
+            io_uring_queue_exit(&inst->ring);
+            ::close(inst->event_fd);
+            inst->event_fd = -1;
+            return false;
+        }
+        io_uring_prep_poll_add(sqe, inst->event_fd, POLLIN);
+        io_uring_sqe_set_data(sqe, nullptr);  // 标记为内部事件
+        ret = io_uring_submit(&inst->ring);
+        if (ret < 0) {
+            UR_LOG("UringPool::setup_instance: submit poll failed, ret=%d", ret);
+            io_uring_queue_exit(&inst->ring);
+            ::close(inst->event_fd);
+            inst->event_fd = -1;
+            return false;
+        }
+        UR_LOG("UringPool::setup_instance: registered eventfd poll, submitted=%d", ret);
+        
         return true;
     }
     

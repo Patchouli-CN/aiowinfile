@@ -420,7 +420,13 @@ class AsyncFile:
     async def close(self) -> None:
         if not self._closed:
             self._closed = True
-            self._impl.close_impl()  # synchronous — no future needed
+            await self._impl.close()
+            
+    def _close_impl(self) -> None:
+        """ 强制关闭函数 """
+        if not self._closed:
+            self._closed = True
+        self._impl._close_impl() # 同步
 
     # ── properties ────────────────────────────────────────────────────────────
 

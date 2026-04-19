@@ -31,6 +31,7 @@ public:
 
 private:
     int m_fd = -1;
+    int m_event_fd = -1;  // 用于唤醒 reaper 线程
     std::atomic<bool> m_running{false};
     std::atomic<long> m_pending{0};
     std::mutex m_posMtx;

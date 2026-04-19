@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <cerrno>
+#include <sys/eventfd.h>
 
 // 缓存事件循环 (与其他后端相同)
 static PyObject* g_cachedLoop = nullptr;
@@ -63,8 +64,16 @@ IOUringBackend::IOUringBackend(const std::string& path, const std::string& mode)
     m_cached_io_uring_flags = cfg.io_uring_flags();
     m_cached_io_uring_sqpoll = cfg.io_uring_sqpoll();
     
+    // 创建 eventfd 用于唤醒 reaper 线程
+    m_event_fd = eventfd(0, EFD_NONBLOCK);
+    if (m_event_fd == -1) {
+        ::close(m_fd);
+        throw std::runtime_error("Failed to create eventfd");
+    }
+    
     // 设置 io_uring
     if (!setup_uring()) {
+        ::close(m_event_fd);
         ::close(m_fd);
         throw std::runtime_error("Failed to setup io_uring");
     }
@@ -106,13 +115,31 @@ bool IOUringBackend::setup_uring() {
 
 void IOUringBackend::teardown_uring() {
     m_reaper_stop.store(true);
+    
+    // 唤醒 reaper 线程：向 eventfd 写入数据
+    uint64_t val = 1;
+    write(m_event_fd, &val, sizeof(val));
+    
     if (m_reaper_thread.joinable()) {
         m_reaper_thread.join();
     }
     io_uring_queue_exit(&m_ring);
+    
+    if (m_event_fd != -1) {
+        ::close(m_event_fd);
+        m_event_fd = -1;
+    }
 }
 
 void IOUringBackend::reaper_loop() {
+    // 将 eventfd 添加到 io_uring 中，用于唤醒
+    struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
+    if (sqe) {
+        io_uring_prep_read(sqe, m_event_fd, nullptr, 0, 0);
+        io_uring_sqe_set_data(sqe, nullptr);  // 唤醒请求不需要关联数据
+        io_uring_submit(&m_ring);
+    }
+    
     while (!m_reaper_stop.load(std::memory_order_relaxed)) {
         struct io_uring_cqe* cqe = nullptr;
         int ret = io_uring_wait_cqe(&m_ring, &cqe);
@@ -128,6 +155,16 @@ void IOUringBackend::reaper_loop() {
                 complete_ok(req, cqe->res);
             } else {
                 complete_error(req, -cqe->res);
+            }
+        } else {
+            // 这是 eventfd 的唤醒事件，重新提交
+            if (!m_reaper_stop.load(std::memory_order_relaxed)) {
+                sqe = io_uring_get_sqe(&m_ring);
+                if (sqe) {
+                    io_uring_prep_read(sqe, m_event_fd, nullptr, 0, 0);
+                    io_uring_sqe_set_data(sqe, nullptr);
+                    io_uring_submit(&m_ring);
+                }
             }
         }
         io_uring_cqe_seen(&m_ring, cqe);

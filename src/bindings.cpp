@@ -205,7 +205,7 @@ NB_MODULE(_ayafileio, m) {
         .def("seek",  &PyAsyncFile::seek,  py::arg("offset"), py::arg("whence") = 0)
         .def("flush", &PyAsyncFile::flush)
         .def("close", &PyAsyncFile::close)
-        .def("close_impl", &PyAsyncFile::close_impl);
+        .def("_close_impl", &PyAsyncFile::close_impl);
 
     // 向后兼容的句柄池 API
     m.def("set_handle_pool_limits", &set_handle_pool_limits,

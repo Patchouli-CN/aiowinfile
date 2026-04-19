@@ -1,0 +1,122 @@
+name: Build and Test
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  # ════════════════════════════════════════════════════════════════════════
+  # Linux 测试 (Ubuntu)
+  # ════════════════════════════════════════════════════════════════════════
+  test-linux:
+    name: "Linux (Python ${{ matrix.python-version }})"
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y liburing-dev  # io_uring 开发库
+    
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install nanobind scikit-build-core aiofiles
+    
+    - name: Build ayafileio
+      run: |
+        pip install -e . -v
+    
+    - name: Check backend info
+      run: |
+        python -c "import ayafileio; print(ayafileio.get_backend_info())"
+    
+    - name: Run tests
+      run: |
+        python test_base.py
+
+  # ════════════════════════════════════════════════════════════════════════
+  # Windows 测试
+  # ════════════════════════════════════════════════════════════════════════
+  test-windows:
+    name: "Windows (Python ${{ matrix.python-version }})"
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install nanobind scikit-build-core aiofiles
+    
+    - name: Build ayafileio
+      run: |
+        pip install -e . -v
+    
+    - name: Check backend info
+      run: |
+        python -c "import ayafileio; print(ayafileio.get_backend_info())"
+    
+    - name: Run tests
+      run: |
+        python test_base.py
+
+  # ════════════════════════════════════════════════════════════════════════
+  # macOS 测试
+  # ════════════════════════════════════════════════════════════════════════
+  test-macos:
+    name: "macOS (Python ${{ matrix.python-version }})"
+    runs-on: macos-14  # Apple Silicon
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install nanobind scikit-build-core aiofiles
+    
+    - name: Build ayafileio
+      run: |
+        pip install -e . -v
+    
+    - name: Check backend info
+      run: |
+        python -c "import ayafileio; print(ayafileio.get_backend_info())"
+    
+    - name: Run tests
+      run: |
+        python test_base.py

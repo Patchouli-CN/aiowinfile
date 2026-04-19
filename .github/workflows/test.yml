@@ -14,6 +14,7 @@ jobs:
   test-linux:
     name: "Linux (Python ${{ matrix.python-version }})"
     runs-on: ubuntu-22.04
+    timeout-minutes: 15  # 整个 job 的超时时间
     strategy:
       fail-fast: false
       matrix:
@@ -43,15 +44,18 @@ jobs:
         pip install nanobind scikit-build-core aiofiles
     
     - name: Build ayafileio (Debug mode)
+      timeout-minutes: 5  # 单个步骤的超时时间
       run: |
         export CMAKE_ARGS="-DCMAKE_BUILD_TYPE=Debug -DENABLE_DEBUG=ON -DENABLE_VERBOSE_LOGGING=ON"
         pip install -e . -v
     
     - name: Check backend info
+      timeout-minutes: 1
       run: |
         python -c "import ayafileio; print(ayafileio.get_backend_info())"
     
     - name: Run tests with debug
+      timeout-minutes: 3  # 测试应该在 3 分钟内完成
       run: |
         python test_base.py
 
@@ -61,6 +65,7 @@ jobs:
   test-windows:
     name: "Windows (Python ${{ matrix.python-version }})"
     runs-on: windows-2022
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -80,20 +85,24 @@ jobs:
         python-version: ${{ matrix.python-version }}
     
     - name: Install Python dependencies
+      timeout-minutes: 2
       run: |
         python -m pip install --upgrade pip
         pip install nanobind scikit-build-core aiofiles
     
     - name: Build ayafileio (Debug mode)
+      timeout-minutes: 5
       run: |
         $env:CMAKE_ARGS = "-DCMAKE_BUILD_TYPE=Debug -DENABLE_DEBUG=ON -DENABLE_VERBOSE_LOGGING=ON"
         pip install -e . -v
     
     - name: Check backend info
+      timeout-minutes: 1
       run: |
         python -c "import ayafileio; print(ayafileio.get_backend_info())"
     
     - name: Run tests
+      timeout-minutes: 3
       run: |
         python test_base.py
 
@@ -103,6 +112,7 @@ jobs:
   test-macos:
     name: "macOS (Python ${{ matrix.python-version }})"
     runs-on: macos-14  # Apple Silicon
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -122,19 +132,23 @@ jobs:
         python-version: ${{ matrix.python-version }}
     
     - name: Install Python dependencies
+      timeout-minutes: 2
       run: |
         python -m pip install --upgrade pip
         pip install nanobind scikit-build-core aiofiles
     
     - name: Build ayafileio (Debug mode)
+      timeout-minutes: 5
       run: |
         export CMAKE_ARGS="-DCMAKE_BUILD_TYPE=Debug -DENABLE_DEBUG=ON -DENABLE_VERBOSE_LOGGING=ON"
         pip install -e . -v
     
     - name: Check backend info
+      timeout-minutes: 1
       run: |
         python -c "import ayafileio; print(ayafileio.get_backend_info())"
     
     - name: Run tests
+      timeout-minutes: 3
       run: |
         python test_base.py

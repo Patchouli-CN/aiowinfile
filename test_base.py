@@ -24,6 +24,46 @@ import ayafileio
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# 共享事件循环管理
+# ════════════════════════════════════════════════════════════════════════════
+
+_shared_loop = None
+
+def get_shared_loop():
+    """获取或创建共享事件循环"""
+    global _shared_loop
+    if _shared_loop is None or _shared_loop.is_closed():
+        # 重置事件循环策略（修复某些 Python 版本的兼容性问题）
+        try:
+            asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
+        except:
+            pass
+        _shared_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(_shared_loop)
+    return _shared_loop
+
+
+def cleanup_shared_loop():
+    """清理共享事件循环"""
+    global _shared_loop
+    if _shared_loop and not _shared_loop.is_closed():
+        # 取消所有待处理任务
+        try:
+            pending = asyncio.all_tasks(_shared_loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                _shared_loop.run_until_complete(
+                    asyncio.gather(*pending, return_exceptions=True)
+                )
+        except:
+            pass
+        _shared_loop.close()
+        _shared_loop = None
+        asyncio.set_event_loop(None)
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # 简单的测试运行器
 # ════════════════════════════════════════════════════════════════════════════
 
@@ -71,9 +111,10 @@ class TestRunner:
                 print(f"  💥 {name}: {type(e).__name__}: {e}")
     
     def run_async(self, name: str, coro_func: Callable[[], Awaitable[None]]):
-        """运行单个异步测试"""
+        """运行单个异步测试（使用共享事件循环）"""
         try:
-            asyncio.run(coro_func()) # type: ignore
+            loop = get_shared_loop()
+            loop.run_until_complete(coro_func())
             self.passed += 1
             print(f"  ✅ {name}")
         except AssertionError as e:
@@ -118,6 +159,7 @@ async def read_file_native(path: Path) -> str:
     """用原生 open 读取文件"""
     with open(path, "r", encoding="utf-8") as f:
         return f.read()
+
 
 # ════════════════════════════════════════════════════════════════════════════
 # 异步测试函数
@@ -578,7 +620,7 @@ async def test_read_write_mode():
             await f.write("Hi")
             await f.seek(0)
             new_content = await f.read()
-            assert new_content == "Hillo, World!", f"内容不是Hillo, World!，而是: {content}"
+            assert new_content == "Hillo, World!", f"内容不是Hillo, World!，而是: {new_content}"
         print("结束 test_read_write_mode")
     finally:
         path.unlink(missing_ok=True)
@@ -664,9 +706,11 @@ def main():
     
     runner.print_summary()
     
+    # 清理共享事件循环
+    cleanup_shared_loop()
+    
     return 0 if runner.failed == 0 else 1
 
 
 if __name__ == "__main__":
     sys.exit(main())
-    

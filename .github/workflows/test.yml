@@ -53,6 +53,9 @@ jobs:
       timeout-minutes: 1
       run: |
         python -c "import ayafileio; print(ayafileio.get_backend_info())"
+
+    - name: Enable core dumps
+      run: ulimit -c unlimited
     
     - name: Run tests with debug
       timeout-minutes: 3  # 测试应该在 3 分钟内完成

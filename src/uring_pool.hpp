@@ -204,32 +204,50 @@ private:
             return false;
         }
         
-        unsigned actual_flags = inst->flags;
+        unsigned actual_flags = 0;
         if (inst->sqpoll) actual_flags |= IORING_SETUP_SQPOLL;
-#ifdef IORING_SETUP_SINGLE_ISSUER
-        actual_flags |= IORING_SETUP_SINGLE_ISSUER;
-#endif
-#ifdef IORING_SETUP_DEFER_TASKRUN
-        actual_flags |= IORING_SETUP_DEFER_TASKRUN;
-#endif
         
         int ret = io_uring_queue_init(inst->queue_depth, &inst->ring, actual_flags);
         if (ret < 0) {
-            UR_LOG("UringManager::setup_instance: io_uring_queue_init failed, ret=%d", ret);
+            UR_LOG("UringManager::setup_instance: io_uring_queue_init failed, ret=%d, errno=%d", ret, errno);
             ::close(inst->event_fd);
             inst->event_fd = -1;
             return false;
         }
         
+        // 提交 eventfd poll 请求
         struct io_uring_sqe* sqe = io_uring_get_sqe(&inst->ring);
-        if (sqe) {
-            io_uring_prep_poll_add(sqe, inst->event_fd, POLLIN);
-            io_uring_sqe_set_data(sqe, nullptr);
-            io_uring_submit(&inst->ring);
+        if (!sqe) {
+            UR_LOG("UringManager::setup_instance: failed to get sqe");
+            io_uring_queue_exit(&inst->ring);
+            ::close(inst->event_fd);
+            inst->event_fd = -1;
+            return false;
+        }
+        
+        io_uring_prep_poll_add(sqe, inst->event_fd, POLLIN);
+        io_uring_sqe_set_data(sqe, nullptr);
+        ret = io_uring_submit(&inst->ring);
+        if (ret < 0) {
+            UR_LOG("UringManager::setup_instance: submit poll failed, ret=%d", ret);
+            io_uring_queue_exit(&inst->ring);
+            ::close(inst->event_fd);
+            inst->event_fd = -1;
+            return false;
+        }
+        
+        // 立即等待并消费 poll CQE，避免 reaper 启动时遇到 -EEXIST
+        struct io_uring_cqe* cqe = nullptr;
+        ret = io_uring_wait_cqe(&inst->ring, &cqe);
+        if (ret < 0) {
+            UR_LOG("UringManager::setup_instance: wait for poll cqe failed, ret=%d", ret);
+        } else {
+            UR_LOG("UringManager::setup_instance: poll cqe received, res=%d", cqe->res);
+            io_uring_cq_advance(&inst->ring, 1);
         }
         
         UR_LOG("UringManager::setup_instance: success, ring_fd=%d, event_fd=%d",
-               inst->ring.ring_fd, inst->event_fd);
+            inst->ring.ring_fd, inst->event_fd);
         return true;
     }
     

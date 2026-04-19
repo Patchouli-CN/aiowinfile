@@ -112,17 +112,47 @@ public:
         on_config_changed();
     }
     
-    // 便捷 getter（无需加锁的快速读取，适用于单次读取）
-    size_t handle_pool_max_per_key() const { return m_config.handle_pool_max_per_key; }
-    size_t handle_pool_max_total() const { return m_config.handle_pool_max_total; }
-    unsigned io_worker_count() const { return m_config.io_worker_count; }
-    size_t buffer_pool_max() const { return m_config.buffer_pool_max; }
-    size_t buffer_size() const { return m_config.buffer_size; }
-    unsigned close_timeout_ms() const { return m_config.close_timeout_ms; }
-    unsigned io_uring_queue_depth() const { return m_config.io_uring_queue_depth; }
-    unsigned io_uring_flags() const { return m_config.io_uring_flags; }
-    bool io_uring_sqpoll() const { return m_config.io_uring_sqpoll; }
-    unsigned io_uring_sqpoll_idle_ms() const { return m_config.io_uring_sqpoll_idle_ms; }
+    // 便捷 getter（线程安全）
+    size_t handle_pool_max_per_key() const { 
+        std::shared_lock<std::shared_mutex> lock(m_mutex);
+        return m_config.handle_pool_max_per_key; 
+    }
+    size_t handle_pool_max_total() const { 
+        std::shared_lock<std::shared_mutex> lock(m_mutex);
+        return m_config.handle_pool_max_total; 
+    }
+    unsigned io_worker_count() const { 
+        std::shared_lock<std::shared_mutex> lock(m_mutex);
+        return m_config.io_worker_count; 
+    }
+    size_t buffer_pool_max() const { 
+        std::shared_lock<std::shared_mutex> lock(m_mutex);
+        return m_config.buffer_pool_max; 
+    }
+    size_t buffer_size() const { 
+        std::shared_lock<std::shared_mutex> lock(m_mutex);
+        return m_config.buffer_size; 
+    }
+    unsigned close_timeout_ms() const { 
+        std::shared_lock<std::shared_mutex> lock(m_mutex);
+        return m_config.close_timeout_ms; 
+    }
+    unsigned io_uring_queue_depth() const { 
+        std::shared_lock<std::shared_mutex> lock(m_mutex);
+        return m_config.io_uring_queue_depth; 
+    }
+    unsigned io_uring_flags() const { 
+        std::shared_lock<std::shared_mutex> lock(m_mutex);
+        return m_config.io_uring_flags; 
+    }
+    bool io_uring_sqpoll() const { 
+        std::shared_lock<std::shared_mutex> lock(m_mutex);
+        return m_config.io_uring_sqpoll; 
+    }
+    unsigned io_uring_sqpoll_idle_ms() const { 
+        std::shared_lock<std::shared_mutex> lock(m_mutex);
+        return m_config.io_uring_sqpoll_idle_ms; 
+    }
     
     // 注册配置变更回调
     using ChangeCallback = void(*)();
@@ -147,7 +177,7 @@ private:
     std::vector<ChangeCallback> m_callbacks;
 };
 
-// 便捷访问宏
+// 便捷访问函数
 inline ConfigManager& config() {
     return ConfigManager::instance();
 }

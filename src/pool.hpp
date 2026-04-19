@@ -2,7 +2,7 @@
 #include <cstddef>
 #include <mutex>
 #include <vector>
-#include <unordered_map>
+#include <map>
 #include <algorithm>
 #include "config.hpp"
 
@@ -33,7 +33,7 @@ public:
     PoolBuf* acquire(size_t required_size) {
         std::lock_guard<std::mutex> lk(m_mutex);
         
-        // 找到足够大的最小缓冲区
+        // 找到足够大的最小缓冲区（使用 map 的 lower_bound）
         auto it = m_pools.lower_bound(required_size);
         if (it != m_pools.end() && !it->second.empty()) {
             PoolBuf* buf = it->second.back();
@@ -81,7 +81,7 @@ private:
     BufferPool() = default;
     
     mutable std::mutex m_mutex;
-    std::unordered_map<size_t, std::vector<PoolBuf*>> m_pools;
+    std::map<size_t, std::vector<PoolBuf*>> m_pools;  // 改用 map 支持 lower_bound
     size_t m_total = 0;
 };
 

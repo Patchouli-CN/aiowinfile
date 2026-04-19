@@ -87,7 +87,6 @@ set(SOURCES
     src/bindings.cpp
     src/globals.cpp
     src/loop_handle.cpp
-    src/pool.cpp
     src/file_handle.cpp
     src/io_backend.cpp
 )

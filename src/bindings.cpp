@@ -160,9 +160,9 @@ static py::dict py_get_backend_info() {
     
 #elif defined(__APPLE__)
     info["platform"] = "macos";
-    info["backend"] = "thread_pool";
-    info["is_truly_async"] = false;
-    info["description"] = "Thread pool - macOS lacks native async file I/O";
+    info["backend"] = "dispatch_io";
+    info["is_truly_async"] = true;
+    info["description"] = "Dispatch I/O (GCD) - native async I/O";
     
 #else
     info["platform"] = "posix";

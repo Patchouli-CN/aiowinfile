@@ -99,7 +99,16 @@ if(WIN32)
         src/handle_pool.cpp
         src/iocp.cpp
     )
+elseif(APPLE)
+    message(STATUS "Building for macOS (Dispatch I/O Backend + Thread Pool fallback)")
+    list(APPEND SOURCES
+        src/backends/macos_gcd_backend.cpp
+        src/backends/thread_io_backend.cpp
+        src/handle_pool_posix.cpp
+    )
+    find_package(Threads REQUIRED)
 else()
+    # Linux / 其他 POSIX
     list(APPEND SOURCES
         src/backends/thread_io_backend.cpp
         src/handle_pool_posix.cpp
@@ -229,6 +238,9 @@ endif()
 if(APPLE)
     target_compile_options(_ayafileio PRIVATE -stdlib=libc++)
     target_link_libraries(_ayafileio PRIVATE -stdlib=libc++)
+    # 链接 Dispatch 框架 (GCD)
+    target_link_libraries(_ayafileio PRIVATE "-framework Dispatch")
+    message(STATUS "🍎 macOS: linked Dispatch framework for native async I/O")
     
     # 输出 macOS 版本信息
     execute_process(
@@ -251,6 +263,15 @@ message(STATUS "  Platform: ${CMAKE_SYSTEM_NAME}")
 message(STATUS "  Debug: ${ENABLE_DEBUG}")
 message(STATUS "  ASan: ${ENABLE_ASAN}")
 message(STATUS "  Verbose logging: ${ENABLE_VERBOSE_LOGGING}")
+if(APPLE)
+    message(STATUS "  Backend: Dispatch I/O (GCD) + Thread Pool fallback")
+elseif(WIN32)
+    message(STATUS "  Backend: IOCP")
+elseif(HAVE_IO_URING)
+    message(STATUS "  Backend: io_uring + Thread Pool fallback")
+else()
+    message(STATUS "  Backend: Thread Pool")
+endif()
 message(STATUS "========================================")
 
 # 安装规则

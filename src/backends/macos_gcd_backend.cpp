@@ -571,16 +571,65 @@ void MacOSGCDBackend::complete_ok(IORequest* req, size_t bytes) {
     UR_DEBUG_LOG("MacOSGCDBackend::complete_ok req=%p, bytes=%zu", (void*)req, bytes);
     m_pending.fetch_sub(1, std::memory_order_release);
     
-    req->loop_handle->push_completion(req, bytes);
-    UR_DEBUG_LOG0("MacOSGCDBackend::complete_ok scheduled");
+    // 在 GCD 队列的回调中，我们已经持有 GIL？不，GCD 队列不一定持有 GIL
+    // 所以需要安全地获取 GIL
+    PyGILState_STATE gs = PyGILState_Ensure();
+    
+    PyObject *val = nullptr;
+    if (req->type == ReqType::Read) {
+        val = PyBytes_FromStringAndSize(req->buf(), static_cast<Py_ssize_t>(bytes));
+    } else if (req->type == ReqType::Write) {
+        val = PyLong_FromSsize_t(static_cast<Py_ssize_t>(bytes));
+    } else {
+        val = Py_None;
+        Py_INCREF(Py_None);
+    }
+    
+    PyObject *set_fn = req->set_result;
+    req->set_result = nullptr;
+    Py_DECREF(req->future);
+    req->future = nullptr;
+    Py_XDECREF(req->set_exception);
+    req->set_exception = nullptr;
+    
+    if (set_fn && val) {
+        req->loop_handle->push(set_fn, val);
+    } else {
+        Py_XDECREF(set_fn);
+        Py_XDECREF(val);
+    }
+    delete req;
+    
+    PyGILState_Release(gs);
+    UR_DEBUG_LOG0("MacOSGCDBackend::complete_ok done");
 }
 
 void MacOSGCDBackend::complete_error(IORequest* req, DWORD err) {
     UR_DEBUG_LOG("MacOSGCDBackend::complete_error req=%p, err=%u", (void*)req, err);
     m_pending.fetch_sub(1, std::memory_order_release);
     
-    req->loop_handle->push_error(req, err);
-    UR_DEBUG_LOG0("MacOSGCDBackend::complete_error scheduled");
+    PyGILState_STATE gs = PyGILState_Ensure();
+    
+    PyObject *exc_class = map_posix_error(static_cast<int>(err));
+    PyObject *exc = PyObject_CallFunction(exc_class, "is", static_cast<int>(err), "I/O operation failed");
+    
+    PyObject *set_fn = req->set_exception;
+    req->set_exception = nullptr;
+    Py_DECREF(req->future);
+    req->future = nullptr;
+    Py_XDECREF(req->set_result);
+    req->set_result = nullptr;
+    
+    if (set_fn && exc) {
+        req->loop_handle->push(set_fn, exc);
+    } else {
+        Py_XDECREF(set_fn);
+        Py_XDECREF(exc);
+    }
+    delete req;
+    
+    PyGILState_Release(gs);
+    UR_DEBUG_LOG0("MacOSGCDBackend::complete_error done");
 }
 
 // ════════════════════════════════════════════════════════════════════════════

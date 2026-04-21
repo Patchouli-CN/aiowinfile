@@ -3,12 +3,10 @@
 #include "backends/windows_io_backend.hpp"
 #elif defined(__APPLE__)
 #include "backends/macos_gcd_backend.hpp"
-#else
 #ifdef HAVE_IO_URING
 #include "backends/io_uring_backend.hpp"
 #endif
 #include "backends/thread_io_backend.hpp"
-#endif
 
 FileHandle::FileHandle(const std::string &path, const std::string &mode) {
 #ifdef _WIN32

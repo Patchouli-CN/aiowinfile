@@ -24,10 +24,10 @@ static LoopHandle* g_cachedLoopHandle = nullptr;
 static std::mutex  g_cacheMtx;
 
 static void refresh_loop_cache(PyObject* loop) {
-    UR_DEBUG_LOG("MacOSGCDBackend: refresh_loop_cache start, loop=%p", (void*)loop);
+    UR_DEBUG_LOG0("MacOSGCDBackend: refresh_loop_cache start");
     std::lock_guard<std::mutex> lk(g_cacheMtx);
     if (loop == g_cachedLoop) {
-        UR_DEBUG_LOG("MacOSGCDBackend: refresh_loop_cache cache hit");
+        UR_DEBUG_LOG0("MacOSGCDBackend: refresh_loop_cache cache hit");
         return;
     }
     Py_XDECREF(g_cachedFutureFn);
@@ -35,12 +35,12 @@ static void refresh_loop_cache(PyObject* loop) {
     g_cachedFutureFn = PyObject_GetAttr(loop, g_str_create_future);
     if (g_cachedFutureFn) {
         Py_INCREF(g_cachedFutureFn);
-        UR_DEBUG_LOG("MacOSGCDBackend: refresh_loop_cache got create_future");
+        UR_DEBUG_LOG0("MacOSGCDBackend: refresh_loop_cache got create_future");
     } else {
-        UR_DEBUG_LOG("MacOSGCDBackend: refresh_loop_cache FAILED to get create_future");
+        UR_DEBUG_LOG0("MacOSGCDBackend: refresh_loop_cache FAILED to get create_future");
     }
     g_cachedLoopHandle = get_or_create_loop_handle(loop);
-    UR_DEBUG_LOG("MacOSGCDBackend: refresh_loop_cache done");
+    UR_DEBUG_LOG0("MacOSGCDBackend: refresh_loop_cache done");
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -99,14 +99,11 @@ MacOSGCDBackend::MacOSGCDBackend(const std::string& path, const std::string& mod
         m_queue,
         ^(int error) {
             UR_DEBUG_LOG("MacOSGCDBackend: dispatch_io_create cleanup handler, error=%d", error);
-            if (error) {
-                // 清理错误处理
-            }
         }
     );
     
     if (!m_channel) {
-        UR_DEBUG_LOG("MacOSGCDBackend: dispatch_io_create failed");
+        UR_DEBUG_LOG0("MacOSGCDBackend: dispatch_io_create failed");
         ::close(m_fd);
         m_fd = -1;
         throw std::runtime_error("Failed to create dispatch I/O channel");
@@ -141,7 +138,7 @@ MacOSGCDBackend::~MacOSGCDBackend() {
         Py_XDECREF(m_create_future);
         Py_XDECREF(m_loop);
     }
-    UR_DEBUG_LOG("MacOSGCDBackend: destructor done");
+    UR_DEBUG_LOG0("MacOSGCDBackend: destructor done");
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -153,15 +150,15 @@ void MacOSGCDBackend::ensure_loop_initialized() {
                  (void*)this, m_loop_initialized);
     
     if (m_loop_initialized) {
-        UR_DEBUG_LOG("MacOSGCDBackend::ensure_loop_initialized already initialized, returning");
+        UR_DEBUG_LOG0("MacOSGCDBackend::ensure_loop_initialized already initialized, returning");
         return;
     }
     
-    UR_DEBUG_LOG("MacOSGCDBackend::ensure_loop_initialized calling get_running_loop...");
+    UR_DEBUG_LOG0("MacOSGCDBackend::ensure_loop_initialized calling get_running_loop...");
     PyObject* loop = PyObject_CallNoArgs(g_get_running_loop);
     if (!loop) {
         PyErr_Clear();
-        UR_DEBUG_LOG("MacOSGCDBackend::ensure_loop_initialized NO RUNNING LOOP");
+        UR_DEBUG_LOG0("MacOSGCDBackend::ensure_loop_initialized NO RUNNING LOOP");
         throw std::runtime_error("No running event loop");
     }
     UR_DEBUG_LOG("MacOSGCDBackend::ensure_loop_initialized got loop=%p", (void*)loop);
@@ -188,7 +185,7 @@ void MacOSGCDBackend::ensure_loop_initialized() {
 // ════════════════════════════════════════════════════════════════════════════
 
 PyObject* MacOSGCDBackend::read(int64_t size) {
-    UR_DEBUG_LOG("MacOSGCDBackend::read start, this=%p, size=%ld", (void*)this, size);
+    UR_DEBUG_LOG("MacOSGCDBackend::read start, this=%p, size=%lld", (void*)this, (long long)size);
     
     try {
         ensure_loop_initialized();
@@ -199,15 +196,15 @@ PyObject* MacOSGCDBackend::read(int64_t size) {
     
     PyObject* future = PyObject_CallNoArgs(m_create_future);
     if (!future) {
-        UR_DEBUG_LOG("MacOSGCDBackend::read failed to create future");
+        UR_DEBUG_LOG0("MacOSGCDBackend::read failed to create future");
         return nullptr;
     }
-    UR_DEBUG_LOG("MacOSGCDBackend::read future created");
+    UR_DEBUG_LOG0("MacOSGCDBackend::read future created");
     
     PyObject* closed_future = check_closed_and_return_future(
         m_running.load(std::memory_order_acquire), m_fd, m_create_future, m_loop);
     if (closed_future) {
-        UR_DEBUG_LOG("MacOSGCDBackend::read file is closed");
+        UR_DEBUG_LOG0("MacOSGCDBackend::read file is closed");
         Py_DECREF(future);
         return closed_future;
     }
@@ -227,7 +224,7 @@ PyObject* MacOSGCDBackend::read(int64_t size) {
         
         int64_t rem = static_cast<int64_t>(st.st_size) - static_cast<int64_t>(m_filePos);
         if (rem <= 0) {
-            UR_DEBUG_LOG("MacOSGCDBackend::read EOF");
+            UR_DEBUG_LOG0("MacOSGCDBackend::read EOF");
             resolve_bytes(future, nullptr, 0);
             return future;
         }
@@ -255,7 +252,6 @@ PyObject* MacOSGCDBackend::read(int64_t size) {
     
     m_pending.fetch_add(1, std::memory_order_relaxed);
     
-    // 持有 this 和 req 的引用，确保在回调执行时对象仍然存活
     auto self = this;
     dispatch_io_read(
         m_channel,
@@ -276,7 +272,6 @@ PyObject* MacOSGCDBackend::read(int64_t size) {
                 size_t total_bytes = dispatch_data_get_size(data);
                 UR_DEBUG_LOG("MacOSGCDBackend::read callback got data, size=%zu", total_bytes);
                 
-                // 将 dispatch_data_t 复制到 req->buf()
                 __block size_t copied = 0;
                 dispatch_data_apply(data, ^bool(dispatch_data_t region, size_t off, const void* buf, size_t len) {
                     UR_DEBUG_LOG("MacOSGCDBackend::read callback copying region: off=%zu, len=%zu", off, len);
@@ -290,13 +285,13 @@ PyObject* MacOSGCDBackend::read(int64_t size) {
                     self->complete_ok(req, total_bytes);
                 }
             } else if (done) {
-                UR_DEBUG_LOG("MacOSGCDBackend::read callback EOF");
+                UR_DEBUG_LOG0("MacOSGCDBackend::read callback EOF");
                 self->complete_ok(req, 0);
             }
         }
     );
     
-    UR_DEBUG_LOG("MacOSGCDBackend::read returning future");
+    UR_DEBUG_LOG0("MacOSGCDBackend::read returning future");
     return future;
 }
 
@@ -353,7 +348,6 @@ PyObject* MacOSGCDBackend::write(Py_buffer* view) {
     
     m_pending.fetch_add(1, std::memory_order_relaxed);
     
-    // 创建 dispatch_data_t
     dispatch_data_t write_data = dispatch_data_create(
         req->buf(), size, m_queue, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
     
@@ -366,8 +360,6 @@ PyObject* MacOSGCDBackend::write(Py_buffer* view) {
         ^(bool done, dispatch_data_t data, int error) {
             UR_DEBUG_LOG("MacOSGCDBackend::write callback: done=%d, error=%d, req=%p",
                          done, error, (void*)req);
-            
-            // 释放 dispatch_data_t（如果需要的话）
             
             if (error) {
                 UR_DEBUG_LOG("MacOSGCDBackend::write callback error=%d", error);
@@ -386,7 +378,7 @@ PyObject* MacOSGCDBackend::write(Py_buffer* view) {
 }
 
 PyObject* MacOSGCDBackend::seek(int64_t offset, int whence) {
-    UR_DEBUG_LOG("MacOSGCDBackend::seek start, offset=%ld, whence=%d", offset, whence);
+    UR_DEBUG_LOG("MacOSGCDBackend::seek start, offset=%lld, whence=%d", (long long)offset, whence);
     
     try {
         ensure_loop_initialized();
@@ -399,9 +391,8 @@ PyObject* MacOSGCDBackend::seek(int64_t offset, int whence) {
     
     auto self = this;
     
-    // 使用 barrier 确保 seek 在之前所有 I/O 完成后执行
     dispatch_io_barrier(m_channel, ^{
-        UR_DEBUG_LOG("MacOSGCDBackend::seek barrier executing");
+        UR_DEBUG_LOG0("MacOSGCDBackend::seek barrier executing");
         
         off_t new_pos;
         {
@@ -414,7 +405,6 @@ PyObject* MacOSGCDBackend::seek(int64_t offset, int whence) {
             } else if (whence == 2) {
                 struct stat st;
                 if (fstat(self->m_fd, &st) != 0) {
-                    // 错误处理
                     dispatch_async(dispatch_get_main_queue(), ^{
                         PyGILState_STATE gs = PyGILState_Ensure();
                         resolve_exc(future, g_OSError, errno, "fstat failed");
@@ -432,7 +422,6 @@ PyObject* MacOSGCDBackend::seek(int64_t offset, int whence) {
                 return;
             }
             
-            // 使用 lseek 更新文件偏移
             new_pos = lseek(self->m_fd, new_pos, SEEK_SET);
             if (new_pos == -1) {
                 dispatch_async(dispatch_get_main_queue(), ^{
@@ -447,14 +436,13 @@ PyObject* MacOSGCDBackend::seek(int64_t offset, int whence) {
             UR_DEBUG_LOG("MacOSGCDBackend::seek new pos=%lld", (long long)new_pos);
         }
         
-        // 回到主线程通知 Python
         dispatch_async(dispatch_get_main_queue(), ^{
             PyGILState_STATE gs = PyGILState_Ensure();
             PyObject* pos = PyLong_FromUnsignedLongLong(self->m_filePos);
             resolve_ok(future, pos);
             Py_DECREF(pos);
             PyGILState_Release(gs);
-            UR_DEBUG_LOG("MacOSGCDBackend::seek future resolved");
+            UR_DEBUG_LOG0("MacOSGCDBackend::seek future resolved");
         });
     });
     
@@ -462,7 +450,7 @@ PyObject* MacOSGCDBackend::seek(int64_t offset, int whence) {
 }
 
 PyObject* MacOSGCDBackend::flush() {
-    UR_DEBUG_LOG("MacOSGCDBackend::flush start, this=%p", (void*)this);
+    UR_DEBUG_LOG0("MacOSGCDBackend::flush start");
     
     try {
         ensure_loop_initialized();
@@ -481,7 +469,7 @@ PyObject* MacOSGCDBackend::flush() {
     auto self = this;
     
     dispatch_io_barrier(m_channel, ^{
-        UR_DEBUG_LOG("MacOSGCDBackend::flush barrier executing");
+        UR_DEBUG_LOG0("MacOSGCDBackend::flush barrier executing");
         
         int result = fsync(self->m_fd);
         
@@ -489,7 +477,7 @@ PyObject* MacOSGCDBackend::flush() {
             PyGILState_STATE gs = PyGILState_Ensure();
             if (result == 0) {
                 resolve_ok(future, Py_None);
-                UR_DEBUG_LOG("MacOSGCDBackend::flush success");
+                UR_DEBUG_LOG0("MacOSGCDBackend::flush success");
             } else {
                 resolve_exc(future, g_OSError, errno, "fsync failed");
                 UR_DEBUG_LOG("MacOSGCDBackend::flush failed, errno=%d", errno);
@@ -506,7 +494,7 @@ PyObject* MacOSGCDBackend::close() {
                  (void*)this, m_loop_initialized);
     
     if (!m_loop_initialized) {
-        UR_DEBUG_LOG("MacOSGCDBackend::close not initialized, closing directly");
+        UR_DEBUG_LOG0("MacOSGCDBackend::close not initialized, closing directly");
         PyObject* loop = PyObject_CallNoArgs(g_get_running_loop);
         if (!loop) {
             PyErr_Clear();
@@ -538,11 +526,10 @@ void MacOSGCDBackend::close_impl() {
     
     bool expected = true;
     if (!m_running.compare_exchange_strong(expected, false, std::memory_order_acq_rel)) {
-        UR_DEBUG_LOG("MacOSGCDBackend::close_impl already closed");
+        UR_DEBUG_LOG0("MacOSGCDBackend::close_impl already closed");
         return;
     }
     
-    // 等待 pending I/O
     int elapsed = 0;
     int wait_time = 1;
     while (elapsed < static_cast<int>(m_cached_close_timeout_ms) &&
@@ -559,24 +546,21 @@ void MacOSGCDBackend::close_impl() {
                      m_pending.load());
     }
     
-    // 关闭 Dispatch I/O 通道
     if (m_channel) {
-        UR_DEBUG_LOG("MacOSGCDBackend::close_impl closing dispatch channel");
+        UR_DEBUG_LOG0("MacOSGCDBackend::close_impl closing dispatch channel");
         dispatch_io_close(m_channel, DISPATCH_IO_STOP);
         m_channel = nullptr;
     }
     
-    // 释放队列
     if (m_queue) {
-        UR_DEBUG_LOG("MacOSGCDBackend::close_impl releasing queue");
+        UR_DEBUG_LOG0("MacOSGCDBackend::close_impl releasing queue");
         dispatch_release(m_queue);
         m_queue = nullptr;
     }
     
-    // 文件描述符已经在 dispatch_io_create 的清理 handler 中关闭
     m_fd = -1;
     
-    UR_DEBUG_LOG("MacOSGCDBackend::close_impl done");
+    UR_DEBUG_LOG0("MacOSGCDBackend::close_impl done");
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -587,9 +571,8 @@ void MacOSGCDBackend::complete_ok(IORequest* req, size_t bytes) {
     UR_DEBUG_LOG("MacOSGCDBackend::complete_ok req=%p, bytes=%zu", (void*)req, bytes);
     m_pending.fetch_sub(1, std::memory_order_release);
     
-    // 通过 LoopHandle 安全地调度到 Python 事件循环
     req->loop_handle->push_completion(req, bytes);
-    UR_DEBUG_LOG("MacOSGCDBackend::complete_ok scheduled");
+    UR_DEBUG_LOG0("MacOSGCDBackend::complete_ok scheduled");
 }
 
 void MacOSGCDBackend::complete_error(IORequest* req, DWORD err) {
@@ -597,7 +580,7 @@ void MacOSGCDBackend::complete_error(IORequest* req, DWORD err) {
     m_pending.fetch_sub(1, std::memory_order_release);
     
     req->loop_handle->push_error(req, err);
-    UR_DEBUG_LOG("MacOSGCDBackend::complete_error scheduled");
+    UR_DEBUG_LOG0("MacOSGCDBackend::complete_error scheduled");
 }
 
 // ════════════════════════════════════════════════════════════════════════════

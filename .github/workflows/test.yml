@@ -292,3 +292,60 @@ jobs:
         fi
         
         exit $EXIT_CODE
+
+    # ════════════════════════════════════════════════════════════════════════
+  # 性能基准测试 (仅 Python 3.14，快速验证)
+  # ════════════════════════════════════════════════════════════════════════
+  benchmark:
+    name: "Benchmark (${{ matrix.os }})"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-2022, macos-14]
+        python-version: ["3.14"]  # 只测最新稳定版，节省 CI 时间
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Install system dependencies (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y liburing-dev
+    
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install nanobind scikit-build-core aiofiles
+    
+    - name: Build ayafileio (Release mode)
+      run: |
+        pip install -e . -v
+    
+    - name: Check backend info
+      run: |
+        python -c "import ayafileio; print(ayafileio.get_backend_info())"
+    
+    - name: Run speed benchmark
+      id: benchmark
+      timeout-minutes: 5
+      run: |
+        python test_speed.py
+    
+    - name: Upload benchmark results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: benchmark-results-${{ matrix.os }}
+        path: |
+          benchmark_results.json
+          benchmark_results_detailed.json
+        if-no-files-found: warn
+        retention-days: 30

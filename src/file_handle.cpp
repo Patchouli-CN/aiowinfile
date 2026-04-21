@@ -3,16 +3,19 @@
 #include "backends/windows_io_backend.hpp"
 #elif defined(__APPLE__)
 #include "backends/macos_gcd_backend.hpp"
+#include "backends/thread_io_backend.hpp"
+#else
 #ifdef HAVE_IO_URING
 #include "backends/io_uring_backend.hpp"
 #endif
 #include "backends/thread_io_backend.hpp"
+#endif
 
 FileHandle::FileHandle(const std::string &path, const std::string &mode) {
 #ifdef _WIN32
     m_backend = new WindowsIOBackend(path, mode);
 #elif defined(__APPLE__)
-    // macOS: 使用 Dispatch I/O 实现真异步
+    // macOS: 优先使用 Dispatch I/O 实现真异步
     try {
         m_backend = new MacOSGCDBackend(path, mode);
     } catch (const std::exception& e) {
@@ -44,4 +47,8 @@ FileHandle::FileHandle(const std::string &path, const std::string &mode) {
     // 降级到线程池后端
     m_backend = new ThreadIOBackend(path, mode);
 #endif
+}
+
+FileHandle::~FileHandle() {
+    delete m_backend;
 }

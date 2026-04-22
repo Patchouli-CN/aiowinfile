@@ -1,15 +1,14 @@
 
 ---
 
-## 📝 README.md (中文版)
-
-```markdown
 # ayafileio
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python Version](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/platform-Cross--platform-blue.svg)](https://en.wikipedia.org/wiki/Cross-platform)
 [![Version](https://img.shields.io/badge/version-1.0.0-red.svg)]()
+
+**当前是中文** | [**english version**](README_EN.md)
 
 > **「幻想郷最速のファイルI/O、風神少女の如く」**  
 > *—— 射命丸文，今日も全力で翔ける*
@@ -197,4 +196,5 @@ MIT 许可证 —— **最速最自由**，详见 [LICENSE](LICENSE)。
 
 **「遅いのは罪だぜ？」**  
 *—— 射命丸文，『文文。新闻』主编*
-```
+
+---

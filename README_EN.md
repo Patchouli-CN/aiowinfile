@@ -8,6 +8,8 @@
 [![Platform](https://img.shields.io/badge/platform-Cross--platform-blue.svg)](https://en.wikipedia.org/wiki/Cross-platform)
 [![Version](https://img.shields.io/badge/version-1.0.0-red.svg)]()
 
+**now is english** | [**chinese version**](README.md)
+
 > **"The fastest file I/O in Gensokyo, swift as the Wind God Maiden."**  
 > *— Aya Shameimaru, always flying at full speed*
 

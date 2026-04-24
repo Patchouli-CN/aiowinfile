@@ -276,7 +276,7 @@ async def run_benchmark_rounds(
     """通用多轮测试：预热 → 正式 → 收集统计"""
     times = []
     for rnd in range(config.test_rounds + config.warmup_rounds):
-        elapsed = await bench_fn(lib)
+        elapsed = await bench_fn() # type: ignore
         if rnd >= config.warmup_rounds:
             round_num = rnd - config.warmup_rounds + 1
             times.append(elapsed)

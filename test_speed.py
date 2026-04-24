@@ -25,9 +25,7 @@ if sys.platform == "win32":
 RICH_AVAILABLE = False
 try:
     from rich.console import Console
-    from rich.table import Table
     from rich.panel import Panel
-    from rich import box
 
     RICH_AVAILABLE = True
     console = Console()
@@ -810,15 +808,11 @@ def main():
     args = parser.parse_args()
     tuning_mode = args.tuning if args.tuning != "auto" else "balanced"
 
-    if sys.platform == "win32":
+    try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-    else:
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        except Exception:
-            pass
+    except Exception:
+        pass
 
     config = Config(
         test_rounds=args.rounds,

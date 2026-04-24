@@ -342,6 +342,7 @@ jobs:
       timeout-minutes: 5
       run: |
         python test_speed.py
+        python test_loguru.py
     
     - name: Upload benchmark results
       if: always()

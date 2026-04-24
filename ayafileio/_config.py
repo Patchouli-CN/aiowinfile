@@ -1,6 +1,10 @@
 """统一配置 API"""
+import sys
 
-from typing import TypedDict, NotRequired
+if sys.version_info >= (3, 11):
+    from typing import TypedDict, NotRequired
+else:
+    from typing_extensions import TypedDict, NotRequired
 
 from ._ayafileio import (  # type: ignore[missing-imports]
     configure as _configure,

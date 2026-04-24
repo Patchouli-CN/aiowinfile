@@ -10,14 +10,16 @@ ayafileio - 跨平台异步文件 I/O 库
 提供与 aiofiles 兼容的 API, 但性能更优。
 """
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 from .util import warn_fake_async
+
 warn_fake_async()
 
 from . import _cleanup  # noqa: F401  # 副作用：注册 atexit
 
-from ._async_file import AsyncFile, open
+from ._async_file import AsyncFile
+from ._open import open
 from ._config import configure, get_config, reset_config, get_backend_info
 from ._compat import (
     set_handle_pool_limits,

@@ -74,6 +74,27 @@ async def main():
 asyncio.run(main())
 ```
 
+```markdown
+## ⚡ Performance Best Practice
+
+ayafileio's file open/close overhead is already in the microsecond range, but for maximum performance, **avoid reopening the same file in a loop**.
+
+```python
+# ❌ DO NOT DO THIS: repeated open/close in a loop
+for i in range(10000):
+    async with ayafileio.open("data.bin", "rb") as f:
+        data = await f.read()
+
+# ✅ DO THIS: open once, operate many times
+async with ayafileio.open("data.bin", "rb") as f:
+    for i in range(10000):
+        await f.seek(0)
+        data = await f.read()
+
+```
+
+The latter is ~6x faster — it eliminates 9999 unnecessary coroutine scheduling round-trips.
+
 ## 🔍 Backend Information
 
 Check which backend is currently in use:

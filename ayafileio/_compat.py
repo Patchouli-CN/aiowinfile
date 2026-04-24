@@ -9,6 +9,7 @@ _has_native_set_iocp = False
 try:
     if sys.platform == "win32":
         from ._ayafileio import set_iocp_worker_count as _set_iocp_worker_count
+
         _has_native_set_iocp = True
 except Exception:
     _has_native_set_iocp = False
@@ -17,6 +18,7 @@ except Exception:
 _has_native_set_worker = False
 try:
     from ._ayafileio import set_worker_count as _set_worker_count
+
     _has_native_set_worker = True
 except Exception:
     _has_native_set_worker = False
@@ -27,8 +29,10 @@ def set_handle_pool_limits(max_per_key: int, max_total: int) -> None:
         raise ValueError("max_per_key and max_total must be positive integers")
     _set_handle_pool_limits(max_per_key, max_total)
 
+
 def get_handle_pool_limits() -> tuple[int, int]:
     return _get_handle_pool_limits()
+
 
 def set_io_worker_count(count: int = 0) -> None:
     if not isinstance(count, int):
@@ -41,6 +45,7 @@ def set_io_worker_count(count: int = 0) -> None:
         _set_iocp_worker_count(count)
     else:
         globals()["_io_worker_count"] = count
+
 
 def set_iocp_worker_count(count: int = 0) -> None:
     set_io_worker_count(count)

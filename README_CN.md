@@ -74,6 +74,23 @@ async def main():
 asyncio.run(main())
 ```
 
+## ⚡ 性能最佳实践
+
+ayafileio 的文件打开/关闭开销已优化至极低（微秒级），但为发挥最高性能，**请勿在循环中反复打开同一文件**。
+
+```python
+# ❌ 不推荐：循环内反复 open/close（每次都有协程调度开销）
+for i in range(10000):
+    async with ayafileio.open("data.bin", "rb") as f:
+        data = await f.read()
+
+# ✅ 推荐：打开一次，多次操作
+async with ayafileio.open("data.bin", "rb") as f:
+    for i in range(10000):
+        await f.seek(0)
+        data = await f.read()
+```
+
 ## 🔍 后端信息
 
 查看当前使用的后端：

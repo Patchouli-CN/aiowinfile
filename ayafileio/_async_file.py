@@ -1,4 +1,4 @@
-""" 异步文件IO """
+"""异步文件IO"""
 
 """异步文件对象"""
 
@@ -189,21 +189,3 @@ class AsyncFile:
     ) -> "AsyncFile":
         """类方法方式打开文件，等同 `AsyncFile(path, mode, encoding)`"""
         return cls(path, mode, encoding)
-    
-    
-def open(
-    path: str | Path,
-    mode: str = "rb",
-    encoding: str | None = None,
-) -> AsyncFile:
-    """打开一个 AsyncFile 实例，用法与内置 open() 类似。
-
-    示例::
-
-        async with ayafileio.open('data.bin', 'rb') as f:
-            data = await f.read()
-
-        async with ayafileio.open('log.txt', 'w', encoding='utf-8') as f:
-            await f.write('hello')
-    """
-    return AsyncFile(path, mode, encoding)

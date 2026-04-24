@@ -18,8 +18,8 @@ from typing import Callable, Awaitable
 
 # 设置 Windows 控制台编码
 if sys.platform == "win32":
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 # 尝试导入 Rich（可选）
 RICH_AVAILABLE = False
@@ -28,6 +28,7 @@ try:
     from rich.table import Table
     from rich.panel import Panel
     from rich import box
+
     RICH_AVAILABLE = True
     console = Console()
 except ImportError:
@@ -52,9 +53,11 @@ except ImportError:
 # 配置
 # ════════════════════════════════════════════════════════════════════════════
 
+
 @dataclass
 class Config:
     """测试配置"""
+
     screenshot_size: int = 512 * 1024
     screenshot_count: int = 100
     item_size: int = 1024
@@ -69,6 +72,7 @@ class Config:
 # ════════════════════════════════════════════════════════════════════════════
 # 智能平台自适应调优
 # ════════════════════════════════════════════════════════════════════════════
+
 
 def get_platform_info() -> dict:
     """获取详细平台信息"""
@@ -93,15 +97,17 @@ def apply_smart_tuning(config: Config):
     backend_info = ayafileio.get_backend_info()
 
     if RICH_AVAILABLE and console:
-        console.print(Panel(
-            f"[cyan]系统:[/cyan] {platform_info['system']}\n"
-            f"[cyan]后端:[/cyan] {backend_info['backend']}\n"
-            f"[cyan]CPU:[/cyan] {platform_info.get('cpu_count', '?')} 核心\n"
-            f"[cyan]CI 环境:[/cyan] {platform_info['is_ci']}\n"
-            f"[cyan]调优模式:[/cyan] {config.tuning_mode}",
-            title="🔧 平台自适应调优",
-            border_style="cyan"
-        ))
+        console.print(
+            Panel(
+                f"[cyan]系统:[/cyan] {platform_info['system']}\n"
+                f"[cyan]后端:[/cyan] {backend_info['backend']}\n"
+                f"[cyan]CPU:[/cyan] {platform_info.get('cpu_count', '?')} 核心\n"
+                f"[cyan]CI 环境:[/cyan] {platform_info['is_ci']}\n"
+                f"[cyan]调优模式:[/cyan] {config.tuning_mode}",
+                title="🔧 平台自适应调优",
+                border_style="cyan",
+            )
+        )
     else:
         print(f"\n🔧 平台自适应调优:")
         print(f"   - 系统: {platform_info['system']}")
@@ -117,42 +123,55 @@ def apply_smart_tuning(config: Config):
 
     if backend_info["backend"] == "iocp":
         tuning_config = {
-            "buffer_size": 512 * 1024, "buffer_pool_max": 1024, "close_timeout_ms": 3000,
+            "buffer_size": 512 * 1024,
+            "buffer_pool_max": 1024,
+            "close_timeout_ms": 3000,
         }
     elif backend_info["backend"] == "io_uring":
         if config.tuning_mode == "throughput":
             tuning_config = {
-                "buffer_size": 256 * 1024, "buffer_pool_max": 1024,
+                "buffer_size": 256 * 1024,
+                "buffer_pool_max": 1024,
                 "io_uring_queue_depth": 512,
                 "io_uring_sqpoll": True if not platform_info["is_ci"] else False,
                 "close_timeout_ms": 4000,
             }
         elif config.tuning_mode == "latency":
             tuning_config = {
-                "buffer_size": 64 * 1024, "buffer_pool_max": 512,
-                "io_uring_queue_depth": 256, "io_uring_sqpoll": False,
+                "buffer_size": 64 * 1024,
+                "buffer_pool_max": 512,
+                "io_uring_queue_depth": 256,
+                "io_uring_sqpoll": False,
                 "close_timeout_ms": 2000,
             }
         else:
             tuning_config = {
-                "buffer_size": 128 * 1024, "buffer_pool_max": 768,
-                "io_uring_queue_depth": 384, "io_uring_sqpoll": False,
+                "buffer_size": 128 * 1024,
+                "buffer_pool_max": 768,
+                "io_uring_queue_depth": 384,
+                "io_uring_sqpoll": False,
                 "close_timeout_ms": 3000,
             }
     elif backend_info["backend"] == "dispatch_io":
         if config.tuning_mode == "throughput":
             tuning_config = {
-                "buffer_size": 256 * 1024, "buffer_pool_max": 1024, "close_timeout_ms": 4000,
+                "buffer_size": 256 * 1024,
+                "buffer_pool_max": 1024,
+                "close_timeout_ms": 4000,
             }
         else:
             tuning_config = {
-                "buffer_size": 128 * 1024, "buffer_pool_max": 512, "close_timeout_ms": 3000,
+                "buffer_size": 128 * 1024,
+                "buffer_pool_max": 512,
+                "close_timeout_ms": 3000,
             }
     else:
         cpu_count = platform_info.get("cpu_count", 4)
         tuning_config = {
             "io_worker_count": min(cpu_count, 8),
-            "buffer_size": 128 * 1024, "buffer_pool_max": 512, "close_timeout_ms": 4000,
+            "buffer_size": 128 * 1024,
+            "buffer_pool_max": 512,
+            "close_timeout_ms": 4000,
         }
 
     if tuning_config:
@@ -168,6 +187,7 @@ def apply_smart_tuning(config: Config):
 # ════════════════════════════════════════════════════════════════════════════
 # 统计数据类
 # ════════════════════════════════════════════════════════════════════════════
+
 
 @dataclass
 class BenchmarkStats:
@@ -237,6 +257,7 @@ class BenchmarkStats:
 # 工具函数
 # ════════════════════════════════════════════════════════════════════════════
 
+
 def generate_screenshot_data(size: int) -> bytes:
     return os.urandom(size)
 
@@ -246,7 +267,7 @@ def generate_json_item(size: int) -> dict:
         "url": f"https://example.com/page/{os.urandom(4).hex()}",
         "title": f"Page Title {os.urandom(8).hex()}",
         "timestamp": time.time(),
-        "data": os.urandom(size - 200).hex()[:size - 200],
+        "data": os.urandom(size - 200).hex()[: size - 200],
     }
     return item
 
@@ -276,13 +297,15 @@ def println_rich(msg: str) -> None:
     else:
         # 去掉 Rich 标记再打印
         import re
-        clean = re.sub(r'\[/?[a-z_ ]+\]', '', msg)
+
+        clean = re.sub(r"\[/?[a-z_ ]+\]", "", msg)
         print(clean)
 
 
 # ════════════════════════════════════════════════════════════════════════════
 # 通用测试运行器
 # ════════════════════════════════════════════════════════════════════════════
+
 
 async def run_benchmark_rounds(
     name: str,
@@ -317,10 +340,12 @@ def print_stats(
             f"P99 {format_duration(stats.p99)}{extra}"
         )
     else:
-        println(f"\n  📈 {lib}: "
-                f"中位数 {format_duration(stats.median)}, "
-                f"抖动 {stats.jitter:.1f}%, "
-                f"P99 {format_duration(stats.p99)}{extra}")
+        println(
+            f"\n  📈 {lib}: "
+            f"中位数 {format_duration(stats.median)}, "
+            f"抖动 {stats.jitter:.1f}%, "
+            f"P99 {format_duration(stats.p99)}{extra}"
+        )
 
     if lib == "ayafileio" and sleep_median_us > 0:
         ratio = sleep_median_us / (stats.median * 1_000_000)
@@ -332,21 +357,31 @@ def print_stats(
                 println(msg)
 
 
-def print_latency_detail(lib: str, latency_stats: BenchmarkStats, sleep_median_us: float = 0) -> None:
+def print_latency_detail(
+    lib: str, latency_stats: BenchmarkStats, sleep_median_us: float = 0
+) -> None:
     """打印单次 write 延迟详情"""
     if RICH_AVAILABLE and console:
         color = "cyan" if lib == "ayafileio" else "dim"
         console.print(f"\n  📝 [{color}]{lib}[/{color}] 单次 write 延迟:")
-        console.print(f"      中位数: [green]{latency_stats.median * 1_000_000:.1f}μs[/green], "
-                      f"P95: {latency_stats.p95 * 1_000_000:.1f}μs, "
-                      f"P99: {latency_stats.p99 * 1_000_000:.1f}μs")
-        console.print(f"      抖动: {latency_stats.jitter:.1f}%, 极差比: {latency_stats.range_ratio:.1f}x")
+        console.print(
+            f"      中位数: [green]{latency_stats.median * 1_000_000:.1f}μs[/green], "
+            f"P95: {latency_stats.p95 * 1_000_000:.1f}μs, "
+            f"P99: {latency_stats.p99 * 1_000_000:.1f}μs"
+        )
+        console.print(
+            f"      抖动: {latency_stats.jitter:.1f}%, 极差比: {latency_stats.range_ratio:.1f}x"
+        )
     else:
         println(f"\n  📝 {lib} 单次 write 延迟:")
-        println(f"      中位数: {latency_stats.median * 1_000_000:.1f}μs, "
-                f"P95: {latency_stats.p95 * 1_000_000:.1f}μs, "
-                f"P99: {latency_stats.p99 * 1_000_000:.1f}μs")
-        println(f"      抖动: {latency_stats.jitter:.1f}%, 极差比: {latency_stats.range_ratio:.1f}x")
+        println(
+            f"      中位数: {latency_stats.median * 1_000_000:.1f}μs, "
+            f"P95: {latency_stats.p95 * 1_000_000:.1f}μs, "
+            f"P99: {latency_stats.p99 * 1_000_000:.1f}μs"
+        )
+        println(
+            f"      抖动: {latency_stats.jitter:.1f}%, 极差比: {latency_stats.range_ratio:.1f}x"
+        )
 
     if lib == "ayafileio" and sleep_median_us > 0 and latency_stats.median > 0:
         ratio = sleep_median_us / (latency_stats.median * 1_000_000)
@@ -361,6 +396,7 @@ def print_latency_detail(lib: str, latency_stats: BenchmarkStats, sleep_median_u
 # ════════════════════════════════════════════════════════════════════════════
 # 事件循环基准校准
 # ════════════════════════════════════════════════════════════════════════════
+
 
 async def calibrate_event_loop_latency() -> dict:
     """测量当前事件循环的最小可测延迟（asyncio.sleep(0) 精度）"""
@@ -383,10 +419,12 @@ async def calibrate_event_loop_latency() -> dict:
         "max_us": max(latencies),
     }
 
-    println(f"  中位数: {stats['median_us']:.1f}μs, "
-            f"P95: {stats['p95_us']:.1f}μs, "
-            f"P99: {stats['p99_us']:.1f}μs, "
-            f"最小: {stats['min_us']:.1f}μs")
+    println(
+        f"  中位数: {stats['median_us']:.1f}μs, "
+        f"P95: {stats['p95_us']:.1f}μs, "
+        f"P99: {stats['p99_us']:.1f}μs, "
+        f"最小: {stats['min_us']:.1f}μs"
+    )
 
     return stats
 
@@ -395,19 +433,24 @@ async def calibrate_event_loop_latency() -> dict:
 # 场景 1：KeyValueStore 写入
 # ════════════════════════════════════════════════════════════════════════════
 
-async def build_kvs_write_bench(lib: str, temp_dir: Path, data_list: list, config: Config):
+
+async def build_kvs_write_bench(
+    lib: str, temp_dir: Path, data_list: list, config: Config
+):
     """构建一个适合传入 run_benchmark_rounds 的 bench 函数"""
     semaphore = asyncio.Semaphore(config.concurrent_limit)
     total_size_mb = sum(len(d) for d in data_list) / (1024 * 1024)
 
     async def bench() -> float:
         if lib == "ayafileio":
+
             async def write_one(i: int, data: bytes):
                 async with semaphore:
                     path = temp_dir / f"file_{i}.bin"
                     async with ayafileio.open(path, "wb") as f:
                         await f.write(data)
         else:
+
             async def write_one(i: int, data: bytes):
                 async with semaphore:
                     path = temp_dir / f"file_{i}.bin"
@@ -427,6 +470,7 @@ async def build_kvs_write_bench(lib: str, temp_dir: Path, data_list: list, confi
 # 场景 2：KeyValueStore 读取
 # ════════════════════════════════════════════════════════════════════════════
 
+
 async def build_kvs_read_bench(lib: str, temp_dir: Path, count: int, config: Config):
     """构建读取 bench"""
     semaphore = asyncio.Semaphore(config.concurrent_limit)
@@ -436,12 +480,14 @@ async def build_kvs_read_bench(lib: str, temp_dir: Path, count: int, config: Con
 
     async def bench() -> float:
         if lib == "ayafileio":
+
             async def read_one(i: int):
                 async with semaphore:
                     path = temp_dir / f"file_{i}.bin"
                     async with ayafileio.open(path, "rb") as f:
                         return await f.read()
         else:
+
             async def read_one(i: int):
                 async with semaphore:
                     path = temp_dir / f"file_{i}.bin"
@@ -461,6 +507,7 @@ async def build_kvs_read_bench(lib: str, temp_dir: Path, count: int, config: Con
 # 场景 3：Dataset 追加写入
 # ════════════════════════════════════════════════════════════════════════════
 
+
 async def build_dataset_write_bench(lib: str, path: Path, items: list, config: Config):
     """构建 Dataset 写入 bench，同时收集单次 write 延迟"""
     semaphore = asyncio.Semaphore(config.concurrent_limit)
@@ -471,6 +518,7 @@ async def build_dataset_write_bench(lib: str, path: Path, items: list, config: C
         write_latencies.clear()
 
         if lib == "ayafileio":
+
             async def write_batch(batch: list):
                 async with semaphore:
                     async with ayafileio.open(path, "a", encoding="utf-8") as f:
@@ -478,8 +526,11 @@ async def build_dataset_write_bench(lib: str, path: Path, items: list, config: C
                             line = json.dumps(item, ensure_ascii=False) + "\n"
                             w_start = time.perf_counter_ns()
                             await f.write(line)
-                            write_latencies.append((time.perf_counter_ns() - w_start) / 1e9)
+                            write_latencies.append(
+                                (time.perf_counter_ns() - w_start) / 1e9
+                            )
         else:
+
             async def write_batch(batch: list):
                 async with semaphore:
                     async with aiofiles.open(path, "a", encoding="utf-8") as f:
@@ -487,10 +538,12 @@ async def build_dataset_write_bench(lib: str, path: Path, items: list, config: C
                             line = json.dumps(item, ensure_ascii=False) + "\n"
                             w_start = time.perf_counter_ns()
                             await f.write(line)
-                            write_latencies.append((time.perf_counter_ns() - w_start) / 1e9)
+                            write_latencies.append(
+                                (time.perf_counter_ns() - w_start) / 1e9
+                            )
 
         batch_size = len(items) // 10
-        batches = [items[i:i + batch_size] for i in range(0, len(items), batch_size)]
+        batches = [items[i : i + batch_size] for i in range(0, len(items), batch_size)]
 
         start = time.perf_counter()
         await asyncio.gather(*[write_batch(batch) for batch in batches])
@@ -504,13 +557,17 @@ async def build_dataset_write_bench(lib: str, path: Path, items: list, config: C
 # 场景 4：混合读写
 # ════════════════════════════════════════════════════════════════════════════
 
-async def build_mixed_workload_bench(lib: str, temp_dir: Path, read_count: int, write_data: list, config: Config):
+
+async def build_mixed_workload_bench(
+    lib: str, temp_dir: Path, read_count: int, write_data: list, config: Config
+):
     """构建混合读写 bench"""
     semaphore = asyncio.Semaphore(config.concurrent_limit)
     import random
 
     async def bench() -> float:
         if lib == "ayafileio":
+
             async def read_one(i: int):
                 async with semaphore:
                     path = temp_dir / f"existing_{i}.bin"
@@ -523,6 +580,7 @@ async def build_mixed_workload_bench(lib: str, temp_dir: Path, read_count: int, 
                     async with ayafileio.open(path, "wb") as f:
                         await f.write(data)
         else:
+
             async def read_one(i: int):
                 async with semaphore:
                     path = temp_dir / f"existing_{i}.bin"
@@ -535,8 +593,9 @@ async def build_mixed_workload_bench(lib: str, temp_dir: Path, read_count: int, 
                     async with aiofiles.open(path, "wb") as f:
                         await f.write(data)
 
-        all_tasks = [read_one(i) for i in range(read_count)] + \
-                    [write_one(i, data) for i, data in enumerate(write_data)]
+        all_tasks = [read_one(i) for i in range(read_count)] + [
+            write_one(i, data) for i, data in enumerate(write_data)
+        ]
         random.shuffle(all_tasks)
 
         start = time.perf_counter()
@@ -551,6 +610,7 @@ async def build_mixed_workload_bench(lib: str, temp_dir: Path, read_count: int, 
 # 主基准运行函数
 # ════════════════════════════════════════════════════════════════════════════
 
+
 async def run_benchmark(config: Config) -> dict:
     """运行完整基准测试"""
 
@@ -562,16 +622,27 @@ async def run_benchmark(config: Config) -> dict:
 
     # ── 准备测试数据 ──
     total_size_mb = (config.screenshot_size * config.screenshot_count) / (1024 * 1024)
-    println(f"\n⚙️  测试配置: "
-            f"截图 {config.screenshot_size // 1024}KB × {config.screenshot_count} = {total_size_mb:.1f}MB, "
-            f"Dataset {config.item_count}条, 并发 {config.concurrent_limit}")
+    println(
+        f"\n⚙️  测试配置: "
+        f"截图 {config.screenshot_size // 1024}KB × {config.screenshot_count} = {total_size_mb:.1f}MB, "
+        f"Dataset {config.item_count}条, 并发 {config.concurrent_limit}"
+    )
 
     println("\n📦 准备测试数据...")
-    screenshot_data = [generate_screenshot_data(config.screenshot_size) for _ in range(config.screenshot_count)]
-    dataset_items = [generate_json_item(config.item_size) for _ in range(config.item_count)]
+    screenshot_data = [
+        generate_screenshot_data(config.screenshot_size)
+        for _ in range(config.screenshot_count)
+    ]
+    dataset_items = [
+        generate_json_item(config.item_size) for _ in range(config.item_count)
+    ]
     existing_count = 50
-    existing_data = [generate_screenshot_data(config.screenshot_size) for _ in range(existing_count)]
-    println(f"✅ 生成了 {config.screenshot_count} 个模拟截图文件 (总计 {total_size_mb:.1f} MB)")
+    existing_data = [
+        generate_screenshot_data(config.screenshot_size) for _ in range(existing_count)
+    ]
+    println(
+        f"✅ 生成了 {config.screenshot_count} 个模拟截图文件 (总计 {total_size_mb:.1f} MB)"
+    )
 
     results = {
         "platform": ayafileio.get_backend_info()["platform"],
@@ -579,7 +650,7 @@ async def run_benchmark(config: Config) -> dict:
         "is_truly_async": ayafileio.get_backend_info()["is_truly_async"],
         "tuning_mode": config.tuning_mode,
         "sleep_0_latency_us": sleep_stats,
-        "benchmarks": {}
+        "benchmarks": {},
     }
 
     # ── 场景 1：KeyValueStore 写入 ──
@@ -590,7 +661,9 @@ async def run_benchmark(config: Config) -> dict:
     kvs_write = {}
     for lib in ["ayafileio", "aiofiles"]:
         with tempfile.TemporaryDirectory() as tmpdir:
-            bench_fn, _ = await build_kvs_write_bench(lib, Path(tmpdir), screenshot_data, config)
+            bench_fn, _ = await build_kvs_write_bench(
+                lib, Path(tmpdir), screenshot_data, config
+            )
             stats = await run_benchmark_rounds("kvs_write", lib, bench_fn, config)
             kvs_write[lib] = stats
             print_stats(lib, stats, sleep_median_us=sleep_stats["median_us"])
@@ -617,7 +690,9 @@ async def run_benchmark(config: Config) -> dict:
             (tmp_path / f"file_{i}.bin").write_bytes(data)
 
         for lib in ["ayafileio", "aiofiles"]:
-            bench_fn, _ = await build_kvs_read_bench(lib, tmp_path, config.screenshot_count, config)
+            bench_fn, _ = await build_kvs_read_bench(
+                lib, tmp_path, config.screenshot_count, config
+            )
             stats = await run_benchmark_rounds("kvs_read", lib, bench_fn, config)
             kvs_read[lib] = stats
             print_stats(lib, stats, sleep_median_us=sleep_stats["median_us"])
@@ -644,15 +719,21 @@ async def run_benchmark(config: Config) -> dict:
         for rnd in range(config.test_rounds + config.warmup_rounds):
             with tempfile.TemporaryDirectory() as tmpdir:
                 tmp_path = Path(tmpdir) / "dataset.jsonl"
-                bench_fn, latencies = await build_dataset_write_bench(lib, tmp_path, dataset_items, config)
+                bench_fn, latencies = await build_dataset_write_bench(
+                    lib, tmp_path, dataset_items, config
+                )
                 elapsed = await bench_fn()
                 if rnd >= config.warmup_rounds:
                     times.append(elapsed)
                     all_latencies.extend(latencies)
-                    println(f"  {lib:10} 第{rnd - config.warmup_rounds + 1}轮: {format_duration(elapsed)}")
+                    println(
+                        f"  {lib:10} 第{rnd - config.warmup_rounds + 1}轮: {format_duration(elapsed)}"
+                    )
 
         stats = BenchmarkStats(name=f"{lib}_dataset", values=times)
-        latency_stats = BenchmarkStats(name=f"{lib}_write_latency", values=all_latencies)
+        latency_stats = BenchmarkStats(
+            name=f"{lib}_write_latency", values=all_latencies
+        )
         throughput = config.item_count / stats.median if stats.median > 0 else 0
         dataset_results[lib] = (stats, latency_stats, throughput)
 
@@ -668,7 +749,10 @@ async def run_benchmark(config: Config) -> dict:
         "ayafileio": aya_stats.to_dict(),
         "aiofiles": aio_stats.to_dict(),
         "speedup": speedup,
-        "write_latency_ms": {"ayafileio": aya_lat.to_dict(), "aiofiles": aio_lat.to_dict()},
+        "write_latency_ms": {
+            "ayafileio": aya_lat.to_dict(),
+            "aiofiles": aio_lat.to_dict(),
+        },
     }
 
     # ── 场景 4：混合读写 ──
@@ -683,7 +767,9 @@ async def run_benchmark(config: Config) -> dict:
             (tmp_path / f"existing_{i}.bin").write_bytes(data)
 
         for lib in ["ayafileio", "aiofiles"]:
-            bench_fn = await build_mixed_workload_bench(lib, tmp_path, existing_count, screenshot_data[:30], config)
+            bench_fn = await build_mixed_workload_bench(
+                lib, tmp_path, existing_count, screenshot_data[:30], config
+            )
             stats = await run_benchmark_rounds("mixed", lib, bench_fn, config)
             mixed[lib] = stats
             print_stats(lib, stats, sleep_median_us=sleep_stats["median_us"])
@@ -712,8 +798,12 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="ayafileio 性能基准测试")
-    parser.add_argument("--tuning", choices=["auto", "balanced", "throughput", "latency", "none"],
-                        default="balanced", help="调优模式 (默认: balanced)")
+    parser.add_argument(
+        "--tuning",
+        choices=["auto", "balanced", "throughput", "latency", "none"],
+        default="balanced",
+        help="调优模式 (默认: balanced)",
+    )
     parser.add_argument("--rounds", type=int, default=5, help="测试轮数")
     parser.add_argument("--items", type=int, default=5000, help="Dataset 条目数")
 
@@ -734,7 +824,7 @@ def main():
         test_rounds=args.rounds,
         item_count=args.items,
         tuning_mode=tuning_mode,
-        enable_tuning=(tuning_mode != "none")
+        enable_tuning=(tuning_mode != "none"),
     )
 
     try:

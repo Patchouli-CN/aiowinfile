@@ -5,14 +5,22 @@ import asyncio
 import tempfile
 import time
 from pathlib import Path
-
+import ayafileio
 from ayafileio import open as aya_open
 
 # 设置 Windows 控制台编码
 if sys.platform == "win32":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+    
 
+# linux性能调优
+if sys.platform == "linux":
+    ayafileio.configure({
+        "io_uring_queue_depth": 512,
+        "io_uring_sqpoll": True,
+        "buffer_size": 256 * 1024,
+    })
 
 async def test_aya(LOG_COUNT, CONCURRENT, NUM_FILES):
     """ayafileio 50 协程并发写 5 个文件"""

@@ -293,9 +293,7 @@ def println_rich(msg: str) -> None:
     if RICH_AVAILABLE and console:
         console.print(msg)
     else:
-        # 去掉 Rich 标记再打印
         import re
-
         clean = re.sub(r"\[/?[a-z_ ]+\]", "", msg)
         print(clean)
 
@@ -435,20 +433,17 @@ async def calibrate_event_loop_latency() -> dict:
 async def build_kvs_write_bench(
     lib: str, temp_dir: Path, data_list: list, config: Config
 ):
-    """构建一个适合传入 run_benchmark_rounds 的 bench 函数"""
     semaphore = asyncio.Semaphore(config.concurrent_limit)
     total_size_mb = sum(len(d) for d in data_list) / (1024 * 1024)
 
     async def bench() -> float:
         if lib == "ayafileio":
-
             async def write_one(i: int, data: bytes):
                 async with semaphore:
                     path = temp_dir / f"file_{i}.bin"
                     async with ayafileio.open(path, "wb") as f:
                         await f.write(data)
         else:
-
             async def write_one(i: int, data: bytes):
                 async with semaphore:
                     path = temp_dir / f"file_{i}.bin"
@@ -470,7 +465,6 @@ async def build_kvs_write_bench(
 
 
 async def build_kvs_read_bench(lib: str, temp_dir: Path, count: int, config: Config):
-    """构建读取 bench"""
     semaphore = asyncio.Semaphore(config.concurrent_limit)
     total_size_mb = sum(
         (temp_dir / f"file_{i}.bin").stat().st_size for i in range(count)
@@ -478,14 +472,12 @@ async def build_kvs_read_bench(lib: str, temp_dir: Path, count: int, config: Con
 
     async def bench() -> float:
         if lib == "ayafileio":
-
             async def read_one(i: int):
                 async with semaphore:
                     path = temp_dir / f"file_{i}.bin"
                     async with ayafileio.open(path, "rb") as f:
                         return await f.read()
         else:
-
             async def read_one(i: int):
                 async with semaphore:
                     path = temp_dir / f"file_{i}.bin"
@@ -507,7 +499,6 @@ async def build_kvs_read_bench(lib: str, temp_dir: Path, count: int, config: Con
 
 
 async def build_dataset_write_bench(lib: str, path: Path, items: list, config: Config):
-    """构建 Dataset 写入 bench，同时收集单次 write 延迟"""
     semaphore = asyncio.Semaphore(config.concurrent_limit)
     write_latencies: list[float] = []
 
@@ -516,7 +507,6 @@ async def build_dataset_write_bench(lib: str, path: Path, items: list, config: C
         write_latencies.clear()
 
         if lib == "ayafileio":
-
             async def write_batch(batch: list):
                 async with semaphore:
                     async with ayafileio.open(path, "a", encoding="utf-8") as f:
@@ -528,7 +518,6 @@ async def build_dataset_write_bench(lib: str, path: Path, items: list, config: C
                                 (time.perf_counter_ns() - w_start) / 1e9
                             )
         else:
-
             async def write_batch(batch: list):
                 async with semaphore:
                     async with aiofiles.open(path, "a", encoding="utf-8") as f:
@@ -559,13 +548,11 @@ async def build_dataset_write_bench(lib: str, path: Path, items: list, config: C
 async def build_mixed_workload_bench(
     lib: str, temp_dir: Path, read_count: int, write_data: list, config: Config
 ):
-    """构建混合读写 bench"""
     semaphore = asyncio.Semaphore(config.concurrent_limit)
     import random
 
     async def bench() -> float:
         if lib == "ayafileio":
-
             async def read_one(i: int):
                 async with semaphore:
                     path = temp_dir / f"existing_{i}.bin"
@@ -578,7 +565,6 @@ async def build_mixed_workload_bench(
                     async with ayafileio.open(path, "wb") as f:
                         await f.write(data)
         else:
-
             async def read_one(i: int):
                 async with semaphore:
                     path = temp_dir / f"existing_{i}.bin"
@@ -598,6 +584,52 @@ async def build_mixed_workload_bench(
 
         start = time.perf_counter()
         await asyncio.gather(*all_tasks)
+        await asyncio.sleep(0.05)
+        return time.perf_counter() - start
+
+    return bench
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# 场景 5：临时文件风暴 — 大量 open-read-close，无句柄复用
+# ════════════════════════════════════════════════════════════════════════════
+
+
+async def build_tempfile_storm_bench(
+    lib: str,
+    temp_dir: Path,
+    file_count: int,
+    file_size: int,
+    config: Config,
+):
+    """构建临时文件风暴 bench：open → write → read → close → unlink"""
+    semaphore = asyncio.Semaphore(config.concurrent_limit)
+
+    async def bench() -> float:
+        if lib == "ayafileio":
+            async def process_one(i: int):
+                async with semaphore:
+                    path = temp_dir / f"temp_{i}.bin"
+                    data = os.urandom(file_size)
+                    async with ayafileio.open(path, "wb") as f:
+                        await f.write(data)
+                    async with ayafileio.open(path, "rb") as f:
+                        await f.read()
+                    path.unlink(missing_ok=True)
+        else:
+            async def process_one(i: int):
+                async with semaphore:
+                    path = temp_dir / f"temp_{i}.bin"
+                    data = os.urandom(file_size)
+                    async with aiofiles.open(path, "wb") as f:
+                        await f.write(data)
+                    async with aiofiles.open(path, "rb") as f:
+                        await f.read()
+                    path.unlink(missing_ok=True)
+
+        start = time.perf_counter()
+        tasks = [process_one(i) for i in range(file_count)]
+        await asyncio.gather(*tasks)
         await asyncio.sleep(0.05)
         return time.perf_counter() - start
 
@@ -780,6 +812,35 @@ async def run_benchmark(config: Config) -> dict:
         "ayafileio": aya_m.to_dict(),
         "aiofiles": aio_m.to_dict(),
         "speedup": speedup,
+    }
+
+    # ── 场景 5：临时文件风暴 ──
+    println("\n" + "─" * 80)
+    println("📊 场景 5：临时文件风暴 (open-read-close, 无句柄复用)")
+    println("─" * 80)
+
+    TEMP_FILE_COUNT = 2000
+    TEMP_FILE_SIZE = 4096  # 4KB
+
+    temp_storm = {}
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        for lib in ["ayafileio", "aiofiles"]:
+            bench_fn = await build_tempfile_storm_bench(
+                lib, tmp_path, TEMP_FILE_COUNT, TEMP_FILE_SIZE, config
+            )
+            stats = await run_benchmark_rounds("temp_storm", lib, bench_fn, config)
+            temp_storm[lib] = stats
+            print_stats(lib, stats, sleep_median_us=sleep_stats["median_us"])
+
+    aya_ts = temp_storm["ayafileio"]
+    aio_ts = temp_storm["aiofiles"]
+    speedup_ts = aio_ts.median / aya_ts.median if aya_ts.median > 0 else 0
+    println(f"  🚀 提速: {speedup_ts:.2f}x" if speedup_ts > 1 else f"  (持平)")
+    results["benchmarks"]["tempfile_storm"] = {
+        "ayafileio": aya_ts.to_dict(),
+        "aiofiles": aio_ts.to_dict(),
+        "speedup": speedup_ts,
     }
 
     # ── 保存结果 ──

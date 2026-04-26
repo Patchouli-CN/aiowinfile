@@ -141,21 +141,19 @@ IOUringBackend::~IOUringBackend() {
 // ════════════════════════════════════════════════════════════════════════════
 
 void IOUringBackend::ensure_loop_initialized() {
+    // 如果已初始化，直接返回
     if (m_loop_initialized) return;
-    UR_LOG("ensure_loop_initialized start: this=%p", (void*)this);
 
     PyObject* loop = PyObject_CallNoArgs(g_get_running_loop);
     if (!loop) {
         PyErr_Clear();
-        UR_LOG("ensure_loop_initialized: no running loop");
         throw std::runtime_error("No running event loop");
     }
-    UR_LOG("ensure_loop_initialized: got loop=%p", (void*)loop);
 
     std::lock_guard<std::mutex> lk(m_loop_init_mtx);
+    // 双重检查
     if (m_loop_initialized) {
         Py_DECREF(loop);
-        UR_LOG("ensure_loop_initialized: already initialized by another thread");
         return;
     }
 
@@ -179,12 +177,12 @@ void IOUringBackend::ensure_loop_initialized() {
         UR_LOG("ensure_loop_initialized: failed to acquire uring instance");
         throw std::runtime_error("Failed to acquire io_uring instance");
     }
+
+    // 🔥 关键点：延迟启动 reaper 线程
+    uring_manager().start_reaper(m_uring);
+    
     UR_LOG("ensure_loop_initialized: acquired uring instance=%p, queue_depth=%u",
            (void*)m_uring.get(), cfg.io_uring_queue_depth());
-
-    // 启动 reaper 线程
-    uring_manager().start_reaper(m_uring);
-    UR_LOG("ensure_loop_initialized: started reaper thread for uring=%p", (void*)m_uring.get());
 
     m_loop_initialized = true;
     UR_LOG("ensure_loop_initialized done: this=%p", (void*)this);

@@ -340,17 +340,50 @@ jobs:
     - name: Run speed benchmark
       id: benchmark
       timeout-minutes: 5
+      continue-on-error: true
       run: |
+        ulimit -c unlimited
+        set +e
         python test_speed.py
+        SPEED_EXIT=$?
         python test_loguru.py
+        LOGURU_EXIT=$?
+        set -e
+        
+        if [ $SPEED_EXIT -ne 0 ] || [ $LOGURU_EXIT -ne 0 ]; then
+          echo "Benchmark failed: test_speed.py=$SPEED_EXIT, test_loguru.py=$LOGURU_EXIT"
+          
+          # 查找 core dump
+          CORES=$(find . /tmp -name "core*" -type f 2>/dev/null | head -5)
+          if [ -n "$CORES" ]; then
+            echo "=== Found core dumps ==="
+            for CORE in $CORES; do
+              echo "Core: $CORE"
+              file "$CORE"
+              if command -v gdb &> /dev/null; then
+                PYTHON_EXE=$(which python)
+                echo "--- GDB Backtrace ---"
+                gdb -batch -ex "thread apply all bt full" "$PYTHON_EXE" "$CORE" 2>&1 | head -300
+                echo "--- GDB Info Registers ---"
+                gdb -batch -ex "info registers" "$PYTHON_EXE" "$CORE" 2>&1
+              fi
+            done
+          fi
+          
+          echo "--- dmesg ---"
+          sudo dmesg | grep -i "segfault\|killed\|oom" | tail -30 || true
+        fi
+        
+        exit $SPEED_EXIT || $LOGURU_EXIT
     
-    - name: Upload benchmark results
-      if: always()
+    - name: Upload core dumps from benchmark
+      if: always() && steps.benchmark.outcome != 'success'
       uses: actions/upload-artifact@v4
       with:
-        name: benchmark-results-${{ matrix.os }}
+        name: benchmark-core-dumps-${{ matrix.os }}
         path: |
-          benchmark_results.json
-          benchmark_results_detailed.json
-        if-no-files-found: warn
-        retention-days: 30
+          core.*
+          *.core
+          /tmp/core.*
+        if-no-files-found: ignore
+        retention-days: 7

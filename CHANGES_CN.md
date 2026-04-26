@@ -7,8 +7,20 @@
 
 ## [1.0.2] - 2026-04-26
 
+### 新增
+- Linux 后端现支持通过 `io_uring` 的 `IORING_OP_OPENAT` 异步打开文件，使用专用本地 ring 避免与 reaper 线程竞争。
+- 新增基准测试场景："临时文件风暴"（无句柄复用的 open-read-close，2000 个文件 × 4KB）。
+
 ### 变更
-- `IOUringBackend` 构造函数重构：打开文件时优先使用 `io_uring` 异步打开，失败时自动回退到同步 `open()`。
+- **完全重写 `IOUringBackend` 架构**：
+  - 文件打开（`open`）现使用独立的 `io_uring` 实例（`local_ring`），与 reaper 线程的共享 ring 完全隔离。
+  - 共享 ring（由 `UringManager` 管理）现延迟到首次 `read()` 或 `write()` 调用时才初始化，而非在构造期间。
+  - 此"双 ring"设计消除了构造函数与 reaper 之间的所有 CQE 竞争，解决了 Linux 上持续出现的 segfault。
+- `ensure_loop_initialized()` 简化：现在仅负责获取用于读写操作的共享 ring。
+- Reaper 循环精简：不再需要处理 `char*` 类型的 user_data（因为 OPENAT 使用自己的 ring），减少热路径分支。
+
+### 修复
+- 修复 Linux 上因构造函数的 `IORING_OP_OPENAT` 与 reaper 线程在同一 ring 上竞争 `io_uring_wait_cqe` 而导致的 segfault。
 
 ## [1.0.1.post2] - 2026-04-26
 

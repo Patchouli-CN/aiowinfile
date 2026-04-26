@@ -20,8 +20,8 @@ from . import _cleanup  # noqa: F401  # 副作用：注册 atexit
 
 from ._async_file import AsyncFile
 from ._open import open
-from ._wrap import wrap_fd  
-from .types import AyaFileIO    
+from ._wrap import wrap_fd
+from .types import AyaFileIO
 from ._config import configure, get_config, reset_config, get_backend_info
 from ._compat import (
     set_handle_pool_limits,

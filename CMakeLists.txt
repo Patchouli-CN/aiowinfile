@@ -78,7 +78,7 @@ if(ENABLE_IO_URING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         add_compile_definitions(HAVE_IO_URING=1)
         message(STATUS "✅ io_uring support enabled")
     else()
-        message(STATUS "⚠️ liburing not found, io_uring support disabled")
+        message(WARNING "⚠️ liburing not found, io_uring support disabled")
     endif()
 endif()
 

@@ -16,6 +16,10 @@
 **Cross-platform asynchronous file I/O library using native async I/O where available.**  
 Windows leverages **IOCP** (I/O Completion Ports), Linux uses **io_uring** (kernel 5.1+), and macOS uses **Dispatch I/O (GCD)** for truly non-blocking file operations.
 
+## changes
+
+**see** -> [**CHANGES**](CHANGES.md)
+
 ## 🏆 The Only True Async on All Three Major Platforms
 
 | Platform | Backend | True Async | Description |

@@ -481,8 +481,10 @@ void ThreadIOBackend::close_impl() {
         return;
     }
     
+    // 先设置 stop flag
     UR_DEBUG_LOG0("ThreadIOBackend::close_impl stopping workers...");
     m_stop.store(true, std::memory_order_release);
+    // 唤醒所有在 m_cv.wait() 上的 worker，让它们看到 m_stop == true 后退出
     m_cv.notify_all();
     
     for (auto& t : m_workers) {
@@ -493,6 +495,7 @@ void ThreadIOBackend::close_impl() {
     m_workers.clear();
     UR_DEBUG_LOG0("ThreadIOBackend::close_impl workers stopped");
     
+    // 等待 pending I/O
     int elapsed = 0;
     int wait_time = 1;
     while (elapsed < static_cast<int>(m_cached_close_timeout_ms) && 
@@ -504,10 +507,15 @@ void ThreadIOBackend::close_impl() {
         wait_time = std::min(wait_time * 2, 32);
     }
     
+    if (m_pending.load() > 0) {
+        UR_DEBUG_LOG("ThreadIOBackend::close_impl timeout waiting for pending I/O, forcing close. pending=%ld",
+                     m_pending.load());
+    }
+    
     if (m_fd != -1) {
+        UR_DEBUG_LOG("ThreadIOBackend::close_impl closing fd=%d", m_fd);
         ::close(m_fd);
         m_fd = -1;
-        UR_DEBUG_LOG0("ThreadIOBackend::close_impl fd closed");
     }
     UR_DEBUG_LOG0("ThreadIOBackend::close_impl done");
 }

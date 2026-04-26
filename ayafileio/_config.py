@@ -39,9 +39,6 @@ class AyafileioConfig(TypedDict, total=False):
     io_uring_queue_depth: NotRequired[int]
     io_uring_sqpoll: NotRequired[bool]
 
-    # 调试
-    enable_debug_log: NotRequired[bool]
-
 
 # ════════════════════════════════════════════════════════════════════════════
 # 公开 API
@@ -71,8 +68,6 @@ def configure(options: AyafileioConfig) -> None:
         io_uring 队列深度（Linux，默认 256）。
     ``io_uring_sqpoll``
         是否启用 SQPOLL 模式（Linux，默认 ``False``）。
-    ``enable_debug_log``
-        是否启用调试日志（默认 ``False``）。
 
     Example::
 

@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1.post2] - 2026-04-26
+
+### Fixed
+- **ThreadIOBackend**: Fixed a deadlock in `close_impl()` where worker threads were not notified to wake up before being joined. Now calls `m_cv.notify_all()` prior to `join()` to ensure workers see the stop flag and exit cleanly.
+- **MANIFEST.in**: Fixed filename typo (was `MAIFEST.in`).
+
+### Added
+- **CHANGES.md**: Started maintaining a changelog.
+
+### Changed
+- **config.hpp**: Removed unused `enable_debug_log` and `enable_perf_stats` configuration options. Removed empty `from_env()` method and the unimplemented callback system (`register_callback`, `on_config_changed`). Reduced code by approximately 130 lines.
+- **CMakeLists.txt**: Elevated the liburing detection message from `STATUS` to `WARNING` when the library is not found, prompting users to install the appropriate development package.
+
 ## [1.0.1] — 2026-04-25
 
 ### Added
@@ -21,7 +34,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Fixed `MANIFEST.in` filename typo.
 - Fixed `test_loguru.py` missing `import io` on Windows.
-- Fixed `ThreadIOBackend` potential deadlock on Linux under concurrent read workloads.
 - Fixed `print_stats`/`print_latency_detail` Rich markup errors when Rich is not installed.
 
 ---

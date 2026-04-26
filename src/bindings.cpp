@@ -97,9 +97,6 @@ static void py_configure(py::dict options) {
     if (options.contains("io_uring_sqpoll")) {
         cfg.io_uring_sqpoll = py::cast<bool>(options["io_uring_sqpoll"]);
     }
-    if (options.contains("enable_debug_log")) {
-        cfg.enable_debug_log = py::cast<bool>(options["enable_debug_log"]);
-    }
     
     ayafileio::config().update(cfg);
     
@@ -118,7 +115,6 @@ static py::dict py_get_config() {
     result["close_timeout_ms"] = cfg.close_timeout_ms;
     result["io_uring_queue_depth"] = cfg.io_uring_queue_depth;
     result["io_uring_sqpoll"] = cfg.io_uring_sqpoll;
-    result["enable_debug_log"] = cfg.enable_debug_log;
     return result;
 }
 

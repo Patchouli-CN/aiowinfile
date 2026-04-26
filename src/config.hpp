@@ -16,30 +16,24 @@ namespace ayafileio {
 
 struct Config {
     // === 句柄池配置 (Windows) ===
-    size_t handle_pool_max_per_key = 64;      // 每个文件最大缓存句柄数
-    size_t handle_pool_max_total   = 2048;    // 全局最大缓存句柄数
+    size_t handle_pool_max_per_key = 64;
+    size_t handle_pool_max_total   = 2048;
     
     // === I/O 工作线程配置 (ThreadIOBackend) ===
-    // 0 = 自动 (CPU核心数 * 2, 上限 16)
-    // 1-128 = 固定数量
-    unsigned io_worker_count = 0;
+    unsigned io_worker_count = 0;  // 0 = 自动
     
     // === 缓冲区池配置 ===
-    size_t buffer_pool_max = 512;             // 最大缓存缓冲区数
-    size_t buffer_size     = 64 * 1024;       // 单个缓冲区大小 (64KB)
+    size_t buffer_pool_max = 512;
+    size_t buffer_size     = 64 * 1024;
     
     // === 超时配置 ===
-    unsigned close_timeout_ms = 4000;         // 关闭时等待 pending I/O 的最大时间 (ms)
+    unsigned close_timeout_ms = 4000;
     
     // === io_uring 配置 (Linux) ===
-    unsigned io_uring_queue_depth = 256;      // io_uring 队列深度
-    unsigned io_uring_flags = 0;              // io_uring 初始化标志 (IORING_SETUP_*)
-    bool io_uring_sqpoll = false;             // 是否启用 SQPOLL 模式
-    unsigned io_uring_sqpoll_idle_ms = 1000;  // SQPOLL 空闲超时 (ms)
-    
-    // === 调试/日志配置 ===
-    bool enable_debug_log = false;             // 是否启用调试日志
-    bool enable_perf_stats = false;            // 是否启用性能统计
+    unsigned io_uring_queue_depth = 256;
+    unsigned io_uring_flags = 0;
+    bool io_uring_sqpoll = false;
+    unsigned io_uring_sqpoll_idle_ms = 1000;
     
     // 验证配置有效性
     bool validate() const {
@@ -52,18 +46,7 @@ struct Config {
         return true;
     }
     
-    // 获取默认配置
-    static Config defaults() {
-        return Config();
-    }
-    
-    // 从环境变量加载
-    static Config from_env() {
-        Config cfg;
-        // 这里可以从环境变量读取
-        // 例如: AYAFILEIO_BUFFER_SIZE=131072
-        return cfg;
-    }
+    static Config defaults() { return Config{}; }
 };
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -77,24 +60,19 @@ public:
         return inst;
     }
     
-    // 获取当前配置（返回副本）
     Config get() const {
         std::shared_lock<std::shared_mutex> lock(m_mutex);
         return m_config;
     }
     
-    // 更新配置（部分或全部）
     void update(const Config& new_config) {
         if (!new_config.validate()) {
             throw std::invalid_argument("Invalid configuration");
         }
         std::unique_lock<std::shared_mutex> lock(m_mutex);
         m_config = new_config;
-        // 通知配置已变更（可以触发回调）
-        on_config_changed();
     }
     
-    // 部分更新（只更新指定的字段）
     void update_partial(const std::unordered_map<std::string, size_t>& updates) {
         std::unique_lock<std::shared_mutex> lock(m_mutex);
         for (const auto& [key, value] : updates) {
@@ -109,10 +87,9 @@ public:
         if (!m_config.validate()) {
             throw std::invalid_argument("Invalid configuration after update");
         }
-        on_config_changed();
     }
     
-    // 便捷 getter（线程安全）
+    // 便捷 getter（线程安全，返回副本）
     size_t handle_pool_max_per_key() const { 
         std::shared_lock<std::shared_mutex> lock(m_mutex);
         return m_config.handle_pool_max_per_key; 
@@ -154,27 +131,11 @@ public:
         return m_config.io_uring_sqpoll_idle_ms; 
     }
     
-    // 注册配置变更回调
-    using ChangeCallback = void(*)();
-    void register_callback(ChangeCallback cb) {
-        std::lock_guard<std::mutex> lock(m_cb_mutex);
-        m_callbacks.push_back(cb);
-    }
-    
 private:
     ConfigManager() : m_config(Config::defaults()) {}
     
-    void on_config_changed() {
-        std::lock_guard<std::mutex> lock(m_cb_mutex);
-        for (auto cb : m_callbacks) {
-            cb();
-        }
-    }
-    
     Config m_config;
     mutable std::shared_mutex m_mutex;
-    std::mutex m_cb_mutex;
-    std::vector<ChangeCallback> m_callbacks;
 };
 
 // 便捷访问函数

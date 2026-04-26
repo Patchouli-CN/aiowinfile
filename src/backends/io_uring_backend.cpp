@@ -71,7 +71,7 @@ IOUringBackend::IOUringBackend(const std::string& path, const std::string& mode)
     m_cached_buffer_pool_max = cfg.buffer_pool_max();
     m_cached_close_timeout_ms = cfg.close_timeout_ms();
     
-    // ── 打开文件：优先异步 ──
+    // ── 打开文件：优先异步 (IORING_OP_OPENAT) ──
     m_fd = -1;
 
     try {
@@ -89,15 +89,32 @@ IOUringBackend::IOUringBackend(const std::string& path, const std::string& mode)
                     
                     int ret = io_uring_submit(&m_uring->ring);
                     if (ret >= 0) {
+                        // 自旋等待：reaper 可能抢走了 CQE，重试直到拿到正确的
                         struct io_uring_cqe* cqe = nullptr;
-                        ret = io_uring_wait_cqe(&m_uring->ring, &cqe);
-                        if (ret >= 0) {
-                            m_fd = cqe->res;
-                            // 释放 path_copy
-                            free(io_uring_cqe_get_data(cqe));
-                            io_uring_cqe_seen(&m_uring->ring, cqe);
-                            if (m_fd >= 0) {
-                                UR_LOG("IOUringBackend: async open success via io_uring, fd=%d", m_fd);
+                        for (int spin = 0; spin < 10000; spin++) {
+                            ret = io_uring_peek_cqe(&m_uring->ring, &cqe);
+                            if (ret == 0 && cqe != nullptr) {
+                                // 检查是不是我们的 OPENAT（user_data == path_copy）
+                                if (io_uring_cqe_get_data(cqe) == path_copy) {
+                                    m_fd = cqe->res;
+                                    free(path_copy);
+                                    io_uring_cqe_seen(&m_uring->ring, cqe);
+                                    if (m_fd >= 0) {
+                                        UR_LOG("IOUringBackend: async open success via io_uring, fd=%d", m_fd);
+                                    }
+                                    break;
+                                } else {
+                                    // 不是我们的 CQE，标记已看到但不处理（reaper 会处理它的）
+                                    io_uring_cqe_seen(&m_uring->ring, cqe);
+                                    // 继续自旋，等待我们的 CQE
+                                }
+                            } else if (ret == -EAGAIN) {
+                                // 队列空，等一下再试
+                                std::this_thread::sleep_for(std::chrono::microseconds(10));
+                            } else {
+                                // 出错，放弃
+                                free(path_copy);
+                                break;
                             }
                         }
                     } else {
@@ -107,6 +124,7 @@ IOUringBackend::IOUringBackend(const std::string& path, const std::string& mode)
             }
         }
     } catch (...) {
+        // ensure_loop_initialized 可能因为"没有运行中 event loop"而抛异常
         // 静默处理，下面走同步 open
     }
     
@@ -188,7 +206,7 @@ void IOUringBackend::ensure_loop_initialized() {
         throw std::runtime_error("Failed to acquire io_uring instance");
     }
 
-    // 🔥 关键点：延迟启动 reaper 线程
+    // 延迟启动 reaper 线程
     uring_manager().start_reaper(m_uring);
     
     UR_LOG("ensure_loop_initialized: acquired uring instance=%p, queue_depth=%u",
@@ -242,7 +260,10 @@ void IOUringBackend::reaper_loop_entry(UringInstance* inst) {
                     file->complete_error(req, static_cast<DWORD>(-cqe->res));
                 }
             } else {
-                UR_LOG("reaper got eventfd wakeup");
+                // user_data 为 nullptr 或非 IORequest*：
+                // 可能是 eventfd wakeup 或者是构造函数的 OPENAT（user_data 是 char*）
+                // 对于 char* 的情况（OPENAT），直接标记已看到，构造函数会自己处理
+                UR_LOG("reaper got non-IORequest cqe (eventfd or OPENAT)");
                 if (!inst->reaper_stop.load(std::memory_order_acquire)) {
                     struct io_uring_sqe* sqe = io_uring_get_sqe(&inst->ring);
                     if (sqe) {

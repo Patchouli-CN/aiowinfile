@@ -35,7 +35,7 @@ static void refresh_loop_cache(PyObject* loop) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// 构造函数 / 析构函数
+// 构造函数：独立 ring OPENAT，零竞争
 // ════════════════════════════════════════════════════════════════════════════
 
 IOUringBackend::IOUringBackend(const std::string& path, const std::string& mode) {
@@ -59,53 +59,45 @@ IOUringBackend::IOUringBackend(const std::string& path, const std::string& mode)
     m_cached_buffer_pool_max = cfg.buffer_pool_max();
     m_cached_close_timeout_ms = cfg.close_timeout_ms();
     
-    // ── 打开文件：优先异步 (IORING_OP_OPENAT) ──
+    // ── 第一步：用独立的本地 ring 做 OPENAT ──
     m_fd = -1;
-    char* path_copy = strdup(path.c_str());
-
-    try {
-        ensure_loop_initialized();
-        
-        if (m_uring && path_copy) {
-            struct io_uring_sqe* sqe = io_uring_get_sqe(&m_uring->ring);
-            if (sqe) {
-                io_uring_prep_openat(sqe, AT_FDCWD, path_copy, flags, 0644);
-                io_uring_sqe_set_data(sqe, path_copy);  // char* 标记这是 OPENAT
-                
-                int ret = io_uring_submit(&m_uring->ring);
-                if (ret >= 0) {
+    {
+        struct io_uring local_ring;
+        if (io_uring_queue_init(8, &local_ring, 0) == 0) {
+            char* path_copy = strdup(path.c_str());
+            if (path_copy) {
+                struct io_uring_sqe* sqe = io_uring_get_sqe(&local_ring);
+                if (sqe) {
+                    io_uring_prep_openat(sqe, AT_FDCWD, path_copy, flags, 0644);
+                    io_uring_submit(&local_ring);
+                    
                     struct io_uring_cqe* cqe = nullptr;
-                    ret = io_uring_wait_cqe(&m_uring->ring, &cqe);
+                    int ret = io_uring_wait_cqe(&local_ring, &cqe);
                     if (ret >= 0 && cqe) {
                         m_fd = cqe->res;
-                        io_uring_cqe_seen(&m_uring->ring, cqe);
-                        if (m_fd >= 0) {
-                            UR_LOG("IOUringBackend: async open success via io_uring, fd=%d", m_fd);
-                        }
+                        io_uring_cqe_seen(&local_ring, cqe);
                     }
                 }
+                free(path_copy);
             }
+            io_uring_queue_exit(&local_ring);
         }
-    } catch (...) {
-        // ensure_loop_initialized 可能抛异常
     }
     
-    free(path_copy);
-    
-    // ── 异步打开失败 → 回退同步 ──
+    // ── 第二步：OPENAT 失败 → 回退同步 ──
     if (m_fd < 0) {
         m_fd = open(path.c_str(), flags, 0644);
-        UR_LOG("IOUringBackend: sync open fallback, fd=%d", m_fd);
     }
     
     if (m_fd == -1) {
-        UR_LOG("IOUringBackend open failed: path=%s, mode=%s, errno=%d", 
-               path.c_str(), mode.c_str(), errno);
         throw_os_error("Failed to open file", path.c_str());
     }
     
-    UR_LOG("IOUringBackend created: this=%p, fd=%d, path=%s, mode=%s", 
-           (void*)this, m_fd, path.c_str(), mode.c_str());
+    UR_LOG("IOUringBackend created: this=%p, fd=%d, path=%s", 
+           (void*)this, m_fd, path.c_str());
+    
+    // ── 第三步：初始化共享 io_uring（供 read/write 使用）──
+    // 这里延迟到第一次真正 I/O 时才初始化，避免 OPENAT 和 reaper 竞争
     
     m_running.store(true, std::memory_order_release);
     m_pending.store(0, std::memory_order_relaxed);
@@ -120,7 +112,6 @@ IOUringBackend::IOUringBackend(const std::string& path, const std::string& mode)
 }
 
 IOUringBackend::~IOUringBackend() {
-    UR_LOG("IOUringBackend destructor: this=%p, fd=%d", (void*)this, m_fd);
     close_impl();
     if (m_loop_initialized) {
         Py_XDECREF(m_create_future);
@@ -129,7 +120,7 @@ IOUringBackend::~IOUringBackend() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// 初始化
+// 延迟初始化：第一次 read/write 时才创建共享 ring + reaper
 // ════════════════════════════════════════════════════════════════════════════
 
 void IOUringBackend::ensure_loop_initialized() {
@@ -164,102 +155,53 @@ void IOUringBackend::ensure_loop_initialized() {
     );
 
     if (!m_uring) {
-        UR_LOG("ensure_loop_initialized: failed to acquire uring instance");
         throw std::runtime_error("Failed to acquire io_uring instance");
     }
 
     uring_manager().start_reaper(m_uring);
-    
-    UR_LOG("ensure_loop_initialized: acquired uring instance=%p, queue_depth=%u",
-           (void*)m_uring.get(), cfg.io_uring_queue_depth());
-
     m_loop_initialized = true;
-    UR_LOG("ensure_loop_initialized done: this=%p", (void*)this);
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// Reaper 循环
+// Reaper 循环 — 只处理 IORequest*，不再遇到 char*
 // ════════════════════════════════════════════════════════════════════════════
 
 void IOUringBackend::reaper_loop_entry(UringInstance* inst) {
-    UR_LOG("reaper_loop_entry start: inst=%p, ring_fd=%d, event_fd=%d", 
-           (void*)inst, inst->ring.ring_fd, inst->event_fd);
-    
     struct io_uring_cqe* cqe = nullptr;
-    int idle_count = 0;
     
     while (!inst->reaper_stop.load(std::memory_order_acquire)) {
         int ret = io_uring_wait_cqe(&inst->ring, &cqe);
-
-        if (ret == -EEXIST) { continue; }
-        if (ret == -EINTR) { continue; }
-        if (ret < 0) {
-            UR_LOG("reaper_loop: io_uring_wait_cqe error ret=%d, exiting", ret);
-            break;
-        }
+        if (ret == -EEXIST || ret == -EINTR) continue;
+        if (ret < 0) break;
         
         unsigned head;
         unsigned count = 0;
         
         io_uring_for_each_cqe(&inst->ring, head, cqe) {
-            void* data = io_uring_cqe_get_data(cqe);
-            IORequest* req = static_cast<IORequest*>(data);
-            
-            // 关键：检查 user_data 是否指向堆内存而不是 IORequest*
-            // IORequest 对象的地址一定大于某个阈值（堆/栈），而 char* 的地址通常是堆分配的路径字符串
-            // 简单判断：如果 data 不为空且看起来像有效指针，尝试当作 IORequest 处理
-            if (req && data != nullptr && cqe->user_data != 0) {
-                // 进一步检查：IORequest 的第一个成员是 OVERLAPPED (Windows) 或直接是 file 指针
-                // 最简单的方法：检查是否在构造函数的 path_copy 范围内（不可行）
-                // 改用：所有通过 submit_io 提交的 SQE，user_data 都是 IORequest*
-                // 只有构造函数的 OPENAT 用 char* 作为 user_data
-                // 
-                // 判断方法：如果 cqe->res 返回的是 fd（>= 0 且很小），则可能是 OPENAT
-                // 但这不可靠。最安全的方式：让 OPENAT 的 SQE 在构造函数中 wait_cqe 自己处理，
-                // reaper 不应该看到 OPENAT 的 CQE —— 因为构造函数在 reaper 启动之前就 wait 了
-                
+            IORequest* req = static_cast<IORequest*>(io_uring_cqe_get_data(cqe));
+            if (req) {
                 auto* file = static_cast<IOUringBackend*>(req->file);
-                if (file && file->m_fd >= 0) {
-                    UR_LOG("reaper got cqe: req=%p, file=%p, fd=%d, res=%d", 
-                           (void*)req, (void*)file, file->m_fd, cqe->res);
-                    if (cqe->res >= 0) {
-                        file->complete_ok(req, static_cast<size_t>(cqe->res));
-                    } else {
-                        file->complete_error(req, static_cast<DWORD>(-cqe->res));
-                    }
+                if (cqe->res >= 0) {
+                    file->complete_ok(req, static_cast<size_t>(cqe->res));
                 } else {
-                    // 可能是 OPENAT 的 CQE 或其他
-                    UR_LOG("reaper got non-IORequest cqe (likely OPENAT char*), skipping");
+                    file->complete_error(req, static_cast<DWORD>(-cqe->res));
                 }
             } else {
-                UR_LOG("reaper got eventfd wakeup or stale CQE");
+                // eventfd wakeup
                 if (!inst->reaper_stop.load(std::memory_order_acquire)) {
                     struct io_uring_sqe* sqe = io_uring_get_sqe(&inst->ring);
                     if (sqe) {
                         io_uring_prep_poll_add(sqe, inst->event_fd, POLLIN);
                         io_uring_sqe_set_data(sqe, nullptr);
-                        ret = io_uring_submit(&inst->ring);
-                        if (ret < 0) {
-                            UR_LOG("reaper_loop: failed to resubmit eventfd poll, ret=%d", ret);
-                        }
+                        io_uring_submit(&inst->ring);
                     }
                 }
             }
             count++;
         }
         
-        if (count > 0) {
-            io_uring_cq_advance(&inst->ring, count);
-            UR_LOG("reaper processed %u cqes", count);
-        } else {
-            idle_count++;
-            if (idle_count % 1000 == 0) {
-                UR_LOG("reaper idle, count=%d", idle_count);
-            }
-        }
+        if (count > 0) io_uring_cq_advance(&inst->ring, count);
     }
-    
-    UR_LOG("reaper_loop_entry exit: inst=%p", (void*)inst);
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -268,29 +210,19 @@ void IOUringBackend::reaper_loop_entry(UringInstance* inst) {
 
 void IOUringBackend::submit_io(IORequest* req, int op, int fd, 
                                 const void* buf, size_t len, off_t offset) {
-    if (!m_uring) {
-        complete_error(req, EINVAL);
-        return;
-    }
+    if (!m_uring) { complete_error(req, EINVAL); return; }
     
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_uring->ring);
-    if (!sqe) {
-        complete_error(req, EBUSY);
-        return;
-    }
+    if (!sqe) { complete_error(req, EBUSY); return; }
     
-    void* writeable_buf = const_cast<void*>(buf);
-    
+    void* wbuf = const_cast<void*>(buf);
     if (op == IORING_OP_READ)
-        io_uring_prep_read(sqe, fd, writeable_buf, static_cast<unsigned>(len), offset);
+        io_uring_prep_read(sqe, fd, wbuf, static_cast<unsigned>(len), offset);
     else if (op == IORING_OP_WRITE)
-        io_uring_prep_write(sqe, fd, writeable_buf, static_cast<unsigned>(len), offset);
+        io_uring_prep_write(sqe, fd, wbuf, static_cast<unsigned>(len), offset);
     else if (op == IORING_OP_FSYNC)
         io_uring_prep_fsync(sqe, fd, 0);
-    else {
-        complete_error(req, EINVAL);
-        return;
-    }
+    else { complete_error(req, EINVAL); return; }
     
     io_uring_sqe_set_data(sqe, req);
     io_uring_submit(&m_uring->ring);
@@ -301,9 +233,8 @@ void IOUringBackend::submit_io(IORequest* req, int op, int fd,
 // ════════════════════════════════════════════════════════════════════════════
 
 PyObject* IOUringBackend::read(int64_t size) {
-    try {
-        ensure_loop_initialized();
-    } catch (const std::runtime_error&) {
+    try { ensure_loop_initialized(); }
+    catch (const std::runtime_error&) {
         return create_rejected_future(nullptr, g_ValueError, "No running event loop", 0);
     }
     
@@ -320,13 +251,12 @@ PyObject* IOUringBackend::read(int64_t size) {
         std::lock_guard<std::mutex> lk(m_posMtx);
         struct stat st;
         if (fstat(m_fd, &st) != 0) {
-            set_os_error("fstat failed");
             resolve_exc(future, g_OSError, errno, "fstat failed");
             return future;
         }
         int64_t rem = static_cast<int64_t>(st.st_size) - static_cast<int64_t>(m_filePos);
         if (rem <= 0) { resolve_bytes(future, nullptr, 0); return future; }
-        readSize = (size < 0) ? static_cast<size_t>(rem) 
+        readSize = (size < 0) ? static_cast<size_t>(rem)
                  : std::min(static_cast<size_t>(size), static_cast<size_t>(rem));
         if (readSize == 0) { resolve_bytes(future, nullptr, 0); return future; }
         offset = m_filePos;
@@ -340,9 +270,8 @@ PyObject* IOUringBackend::read(int64_t size) {
 }
 
 PyObject* IOUringBackend::write(Py_buffer* view) {
-    try {
-        ensure_loop_initialized();
-    } catch (const std::runtime_error&) {
+    try { ensure_loop_initialized(); }
+    catch (const std::runtime_error&) {
         return create_rejected_future(nullptr, g_ValueError, "No running event loop", 0);
     }
     
@@ -366,7 +295,6 @@ PyObject* IOUringBackend::write(Py_buffer* view) {
         if (m_appendMode) {
             struct stat st;
             if (fstat(m_fd, &st) != 0) {
-                set_os_error("fstat failed");
                 resolve_exc(future, g_OSError, errno, "fstat failed");
                 return future;
             }
@@ -385,9 +313,8 @@ PyObject* IOUringBackend::write(Py_buffer* view) {
 }
 
 PyObject* IOUringBackend::seek(int64_t offset, int whence) {
-    try {
-        ensure_loop_initialized();
-    } catch (const std::runtime_error&) {
+    try { ensure_loop_initialized(); }
+    catch (const std::runtime_error&) {
         return create_rejected_future(nullptr, g_ValueError, "No running event loop", 0);
     }
     
@@ -401,15 +328,11 @@ PyObject* IOUringBackend::seek(int64_t offset, int whence) {
         else if (whence == 2) {
             struct stat st;
             if (fstat(m_fd, &st) != 0) {
-                set_os_error("fstat failed");
                 resolve_exc(future, g_OSError, errno, "fstat failed");
                 return future;
             }
             m_filePos = static_cast<uint64_t>(static_cast<int64_t>(st.st_size) + offset);
-        } else {
-            resolve_exc(future, g_ValueError, 0, "Invalid whence value");
-            return future;
-        }
+        } else { resolve_exc(future, g_ValueError, 0, "Invalid whence value"); return future; }
     }
     
     PyObject* pos = PyLong_FromUnsignedLongLong(m_filePos);
@@ -418,9 +341,8 @@ PyObject* IOUringBackend::seek(int64_t offset, int whence) {
 }
 
 PyObject* IOUringBackend::flush() {
-    try {
-        ensure_loop_initialized();
-    } catch (const std::runtime_error&) {
+    try { ensure_loop_initialized(); }
+    catch (const std::runtime_error&) {
         return create_rejected_future(nullptr, g_ValueError, "No running event loop", 0);
     }
     
@@ -462,7 +384,7 @@ void IOUringBackend::close_impl() {
     if (!m_running.compare_exchange_strong(expected, false, std::memory_order_acq_rel)) return;
     
     int elapsed = 0, wait_time = 1;
-    while (elapsed < static_cast<int>(m_cached_close_timeout_ms) && 
+    while (elapsed < static_cast<int>(m_cached_close_timeout_ms) &&
            m_pending.load(std::memory_order_acquire) > 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(wait_time));
         elapsed += wait_time;
@@ -481,12 +403,12 @@ void IOUringBackend::complete_ok(IORequest* req, size_t bytes) {
     m_pending.fetch_sub(1, std::memory_order_release);
     PyGILState_STATE gs = PyGILState_Ensure();
     
-    PyObject* val = nullptr;
+    PyObject* val;
     if (req->type == ReqType::Read)
         val = PyBytes_FromStringAndSize(req->buf(), static_cast<Py_ssize_t>(bytes));
     else if (req->type == ReqType::Write)
         val = PyLong_FromSsize_t(static_cast<Py_ssize_t>(bytes));
-    else { val = Py_None; Py_INCREF(Py_None); }
+    else { val = Py_None; Py_INCREF(val); }
     
     PyObject* set_fn = req->set_result; req->set_result = nullptr;
     Py_DECREF(req->future); req->future = nullptr;

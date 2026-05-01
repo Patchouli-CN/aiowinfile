@@ -5,6 +5,26 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，
 本项目遵循 [语义化版本](https://semver.org/spec/v2.0.0.html)。
 
+## [1.1.1] - 2026-05-01
+
+### 新增
+- **Python 3.14+ free-threading 支持**: 在 `nanobind_add_module()` 中添加 `FREE_THREADED` 标记，`ayafileio` 现可在 `python3.14t`（自由线程构建）中原生运行，无需 GIL。
+- **CMake 构建增强**: `nanobind_add_module` 现在传入 `FREE_THREADED` 参数，自动处理 free-threaded 编译目标。
+- **CI 矩阵扩展**: 新增 Python 3.14 free-threading 构建，覆盖 Windows / Linux / macOS 全平台。
+
+### 测试验证
+- **Windows (IOCP)**：45 个测试全部通过，场景 3 追加写入比 aiofiles 快 **3.06 倍**
+- **Linux (io_uring)**：45 个测试全部通过，场景 5 临时文件风暴比 aiofiles 快 **1.92 倍**
+- **macOS (Dispatch I/O)**：45 个测试全部通过，loguru 并发写入比线程池快 **2.1 倍**
+- 所有测试在 free-threading 环境下稳定运行，无数据竞争，无 GIL 重入问题
+
+### 变更
+- `CMakeLists.txt`：为 `nanobind_add_module` 调用添加 `FREE_THREADED` 参数
+
+### 打包说明
+- 预编译 wheel 现已包含 Python 3.14t 版本
+- 源码包保持不变，free-threading 支持在构建时启用
+
 ## [1.1.0] - 2026-04-30
 
 ### 新增

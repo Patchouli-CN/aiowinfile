@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-05-01
+
+### Added
+- **Python 3.14+ free-threading support**: Added `FREE_THREADED` flag to `nanobind_add_module()`. `ayafileio` now runs natively on `python3.14t` (free-threading builds) without GIL.
+- **CMake build enhancement**: `nanobind_add_module` now passes `FREE_THREADED` argument, automatically handling free-threaded compilation targets.
+- **CI matrix expansion**: Added Python 3.14 free-threading builds to CI, covering Windows / Linux / macOS.
+
+### Tested & Verified
+- **Windows (IOCP)**: 45/45 tests passed, Scenario 3 append write **3.06x** speedup vs aiofiles
+- **Linux (io_uring)**: 45/45 tests passed, Scenario 5 tempfile storm **1.92x** speedup vs aiofiles
+- **macOS (Dispatch I/O)**: 45/45 tests passed, loguru concurrent write **2.1x** speedup vs thread pool
+- All tests run stably under free-threading environment — no data races, no GIL reentrancy issues
+
+### Changed
+- `CMakeLists.txt`: Added `FREE_THREADED` parameter to `nanobind_add_module` invocation
+
+### Notes for packagers
+- Pre-built wheels for Python 3.14t are now included in the release assets
+- Source distribution remains unchanged; free-threading support is enabled at build time
+
+
 ## [1.1.0] - 2026-04-30
 
 ### Added

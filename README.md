@@ -145,7 +145,6 @@ ayafileio.reset_config()
 | `close_timeout_ms` | 4000 | Close timeout for pending I/O (ms) |
 | `io_uring_queue_depth` | 256 | io_uring queue depth (Linux) |
 | `io_uring_sqpoll` | False | Enable SQPOLL mode (Linux) |
-| `enable_debug_log` | False | Enable debug logging |
 
 ## 📚 API Reference
 

@@ -143,7 +143,6 @@ ayafileio.reset_config()
 | `close_timeout_ms` | 4000 | 关闭时等待 pending I/O 的超时 (ms) |
 | `io_uring_queue_depth` | 256 | io_uring 队列深度 (Linux) |
 | `io_uring_sqpoll` | False | 是否启用 SQPOLL 模式 (Linux) |
-| `enable_debug_log` | False | 是否启用调试日志 |
 
 ## 📚 API 参考
 

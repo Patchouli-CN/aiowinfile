@@ -51,3 +51,17 @@ PoolKey make_pool_key(const std::string &path, DWORD access, DWORD disp);
 // Runtime control of pool sizes
 void set_handle_pool_limits(size_t max_per_key, size_t max_total);
 std::pair<size_t, size_t> get_handle_pool_limits();
+
+// ════════════════════════════════════════════════════════════════════════════
+// POSIX stub：非 Windows 平台不需要句柄缓存
+// ════════════════════════════════════════════════════════════════════════════
+#ifndef _WIN32
+inline HANDLE handle_pool_acquire(const PoolKey&) { return INVALID_HANDLE_VALUE; }
+inline void handle_pool_release(const PoolKey&, HANDLE h) { if (h != -1) ::close(h); }
+inline void handle_pool_drain() {}
+inline PoolKey make_pool_key(const std::string& path, DWORD access, DWORD disp) {
+    return PoolKey{path, access, disp};
+}
+inline void set_handle_pool_limits(size_t, size_t) {}
+inline std::pair<size_t, size_t> get_handle_pool_limits() { return {64, 2048}; }
+#endif

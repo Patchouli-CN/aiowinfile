@@ -104,14 +104,12 @@ elseif(APPLE)
     list(APPEND SOURCES
         src/backends/macos_gcd_backend.cpp
         src/backends/thread_io_backend.cpp
-        src/handle_pool_posix.cpp
     )
     find_package(Threads REQUIRED)
 else()
     # Linux / 其他 POSIX
     list(APPEND SOURCES
         src/backends/thread_io_backend.cpp
-        src/handle_pool_posix.cpp
     )
     
     if(HAVE_IO_URING)

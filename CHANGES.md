@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1.post1] - 2026-05-02
+
+### Removed
+- **`handle_pool_posix.cpp`**: Removed the empty handle pool stub for POSIX platforms. On POSIX, `open()`/`close()` are microsecond-level operations, making handle caching unnecessary. The API surface is preserved via inline stubs in the header for cross-platform compatibility.
+
+### Changed
+- **`handle_pool.hpp`**: Added inline stub functions for POSIX platforms, replacing the deleted `handle_pool_posix.cpp`.
+- **`CMakeLists.txt`**: Removed references to `handle_pool_posix.cpp` from macOS and Linux builds, reducing the number of compiled source files.
+
 ## [1.1.1] - 2026-05-01
 
 ### Added

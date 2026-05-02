@@ -27,9 +27,10 @@ jobs:
       CIBW_ENABLE: "cpython-freethreading"
       CIBW_PROJECT_REQUIRES_PYTHON: ">=3.10"
       
-      # Linux: io_uring
       CIBW_ENVIRONMENT_LINUX: "ENABLE_IO_URING=ON"
       CIBW_BEFORE_ALL_LINUX: "yum install -y liburing-devel"
+      
+      CIBW_ENVIRONMENT_MACOS: "MACOSX_DEPLOYMENT_TARGET=13.0"
 
     steps:
       - uses: actions/checkout@v4

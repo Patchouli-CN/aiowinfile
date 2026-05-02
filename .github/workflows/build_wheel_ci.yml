@@ -1,6 +1,9 @@
 name: build wheel with ci
 
 on:
+  push:
+    branches: [main]
+    tags: ['v*']
   workflow_dispatch:
 
 jobs:
@@ -15,14 +18,15 @@ jobs:
       CIBW_ARCHS_LINUX: "x86_64 aarch64 riscv64"
       CIBW_ARCHS_WINDOWS: "AMD64 x86"
       CIBW_ARCHS_MACOS: "x86_64 universal2 arm64"
-      CIBW_ENVIRONMENT: USE-CYTHON="1" USE-CFFI="1"
       CIBW_PROJECT_REQUIRES_PYTHON: ">=3.10"
       CIBW_ENABLE: "cpython-freethreading"
       CIBW_BUILD_FRONTEND: "build"
       CIBW_TEST_SKIP: "*"
 
       CIBW_ENVIRONMENT_LINUX: "ENABLE_IO_URING=ON"
-      CIBW_BEFORE_ALL_LINUX: "apt install -y liburing-dev"
+      CIBW_BEFORE_ALL_LINUX: "yum install -y liburing-devel"
+      
+      CIBW_ENVIRONMENT_MACOS: "MACOSX_DEPLOYMENT_TARGET=13.0"
     steps:
     - uses: actions/checkout@v4
     - name: Check out recursively

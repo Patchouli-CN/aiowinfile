@@ -22,6 +22,7 @@ jobs:
       CIBW_ENABLE: "cpython-freethreading"
       CIBW_BUILD_FRONTEND: "build"
       CIBW_TEST_SKIP: "*"
+      CIBW_SKIP: "*-musllinux_*"
 
       CIBW_ENVIRONMENT_LINUX: "ENABLE_IO_URING=ON"
       CIBW_BEFORE_ALL_LINUX: "yum install -y liburing-devel"

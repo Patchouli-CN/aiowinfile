@@ -32,8 +32,6 @@ WindowsIOBackend::WindowsIOBackend(const std::string &path, const std::string &m
     m_create_future = g_cachedFutureFn; Py_INCREF(m_create_future);
     m_loop_handle   = g_cachedLoopHandle;
 
-    { std::lock_guard<std::mutex> lk(g_openFilesMtx); g_openFiles.insert(this); }
-
     DWORD access = 0, disp = OPEN_EXISTING;
     ModeInfo mi;
     try {
@@ -96,6 +94,9 @@ WindowsIOBackend::WindowsIOBackend(const std::string &path, const std::string &m
         // FILE_SKIP_COMPLETION_PORT_ON_SUCCESS persists across pool recycles.
     }
 
+    // 所有可能失败的初始化均已完成，加入打开文件集合
+    { std::lock_guard<std::mutex> lk(g_openFilesMtx); g_openFiles.insert(this); }
+
     m_running.store(true, std::memory_order_release);
     m_pending.store(0, std::memory_order_relaxed);
     m_filePos = 0;
@@ -125,11 +126,6 @@ WindowsIOBackend::WindowsIOBackend(int fd, const std::string& mode, bool owns_fd
     m_create_future = g_cachedFutureFn; 
     Py_INCREF(m_create_future);
     m_loop_handle   = g_cachedLoopHandle;
-
-    { 
-        std::lock_guard<std::mutex> lk(g_openFilesMtx); 
-        g_openFiles.insert(this); 
-    }
 
     // ── 解析 mode ──
     ModeInfo mi;
@@ -213,13 +209,16 @@ WindowsIOBackend::WindowsIOBackend(int fd, const std::string& mode, bool owns_fd
     SetFileCompletionNotificationModes(m_handle,
         FILE_SKIP_COMPLETION_PORT_ON_SUCCESS | FILE_SKIP_SET_EVENT_ON_HANDLE);
 
+    // 所有可能失败的初始化均已完成，加入打开文件集合
+    { std::lock_guard<std::mutex> lk(g_openFilesMtx); g_openFiles.insert(this); }
+
     // ── 初始化状态 ──
     m_running.store(true, std::memory_order_release);
     m_pending.store(0, std::memory_order_relaxed);
     m_filePos = 0;
-    
+
     if (m_appendMode) {
-        LARGE_INTEGER li{}; 
+        LARGE_INTEGER li{};
         if (GetFileSizeEx(m_handle, &li)) {
             m_filePos = (uint64_t)li.QuadPart;
         }

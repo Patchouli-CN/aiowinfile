@@ -47,42 +47,33 @@ void cache_globals() {
 #ifdef _WIN32
 [[noreturn]] void win_throw_os_error(DWORD err, const char *msg, const char *filename) {
     PyObject *cls = map_win_error(err);
-    
+
     const char *error_msg = msg;
-    char custom_msg[512];  // 增大缓冲区
-    
-    switch (err) {
-        case ERROR_FILE_NOT_FOUND:
-        case ERROR_PATH_NOT_FOUND:
-            if (filename) {
-                snprintf(custom_msg, sizeof(custom_msg), 
-                         "[Errno %d] No such file or directory: '%s'", (int)err, filename);
-                error_msg = custom_msg;
-            }
-            break;
-        case ERROR_FILE_EXISTS:
-            if (filename) {
-                snprintf(custom_msg, sizeof(custom_msg), 
+    char custom_msg[512];
+
+    if (filename) {
+        switch (err) {
+            case ERROR_FILE_NOT_FOUND:
+            case ERROR_PATH_NOT_FOUND:
+                snprintf(custom_msg, sizeof(custom_msg),
+                         "No such file or directory: '%s'", filename);
+                break;
+            case ERROR_FILE_EXISTS:
+                snprintf(custom_msg, sizeof(custom_msg),
                          "File exists: '%s'", filename);
-                error_msg = custom_msg;
-            }
-            break;
-        case ERROR_ACCESS_DENIED:
-            if (filename) {
-                snprintf(custom_msg, sizeof(custom_msg), 
-                         "[Errno %d] Permission denied: '%s'", (int)err, filename);
-                error_msg = custom_msg;
-            }
-            break;
-        default:
-            if (filename) {
-                snprintf(custom_msg, sizeof(custom_msg), 
-                         "[Errno %d] %s: '%s'", (int)err, msg, filename);
-                error_msg = custom_msg;
-            }
-            break;
+                break;
+            case ERROR_ACCESS_DENIED:
+                snprintf(custom_msg, sizeof(custom_msg),
+                         "Permission denied: '%s'", filename);
+                break;
+            default:
+                snprintf(custom_msg, sizeof(custom_msg),
+                         "%s: '%s'", msg, filename);
+                break;
+        }
+        error_msg = custom_msg;
     }
-    
+    // Python 会根据平台自动添加 [Errno %d] 或 [WinError %d]，不要手动加
     PyObject *exc = PyObject_CallFunction(cls, "is", (int)err, error_msg);
     PyErr_SetObject((PyObject *)Py_TYPE(exc), exc);
     Py_DECREF(exc);

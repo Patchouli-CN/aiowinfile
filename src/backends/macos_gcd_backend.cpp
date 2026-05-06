@@ -64,18 +64,12 @@ MacOSGCDBackend::MacOSGCDBackend(const std::string& path, const std::string& mod
         UR_DEBUG_LOG("MacOSGCDBackend: parse_mode failed: %s", e.what());
         throw py::value_error(e.what());
     }
-    
-    if (mi.hasW) {
-        flags = O_WRONLY | O_CREAT | O_TRUNC;
-    } else if (mi.hasA) {
-        flags = O_WRONLY | O_CREAT | O_APPEND;
-    } else if (mi.hasX) {
-        flags = O_WRONLY | O_CREAT | O_EXCL;
-    }
-    if (mi.plus) {
-        flags = O_RDWR;
-    }
-    
+
+    if (mi.hasW)      flags = O_WRONLY | O_CREAT | O_TRUNC;
+    else if (mi.hasA) flags = O_WRONLY | O_CREAT | O_APPEND;
+    else if (mi.hasX) flags = O_WRONLY | O_CREAT | O_EXCL;
+    if (mi.plus)      flags = (flags & ~O_ACCMODE) | O_RDWR;
+
     m_appendMode = mi.appendMode;
     
     UR_DEBUG_LOG("MacOSGCDBackend: opening file with flags=%d", flags);

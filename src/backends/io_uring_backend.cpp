@@ -46,12 +46,12 @@ IOUringBackend::IOUringBackend(const std::string& path, const std::string& mode)
     } catch (const std::invalid_argument& e) {
         throw py::value_error(e.what());
     }
-    
-    if (mi.hasW) flags = O_WRONLY | O_CREAT | O_TRUNC;
+
+    if (mi.hasW)      flags = O_WRONLY | O_CREAT | O_TRUNC;
     else if (mi.hasA) flags = O_WRONLY | O_CREAT | O_APPEND;
     else if (mi.hasX) flags = O_WRONLY | O_CREAT | O_EXCL;
-    if (mi.plus) flags = O_RDWR;
-    
+    if (mi.plus)      flags = (flags & ~O_ACCMODE) | O_RDWR;
+
     m_appendMode = mi.appendMode;
     
     auto& cfg = ayafileio::config();

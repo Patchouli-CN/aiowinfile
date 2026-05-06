@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.2.post1] - 2026-05-06
+
+### Fixed
+- **POSIX `wb+` mode regression**: `parse_mode()` set `O_RDWR` via `if (mi.plus) flags = O_RDWR`, which overwrote `O_CREAT` / `O_TRUNC` / `O_APPEND` flags. This caused `FileNotFoundError` when opening files with `wb+`, `ab+`, etc. Fixed in all three POSIX backends by using `(flags & ~O_ACCMODE) | O_RDWR`.
+- **Double `[Errno N]` in exception messages**: `throw_os_error()` / `set_os_error()` manually formatted `[Errno %d]` into the message string, but Python's `OSError` constructor also adds the prefix — resulting in `FileNotFoundError: [Errno 2] [Errno 2] Failed to open file: '/path'`. Now uses the proper 2-arg/3-arg `OSError` constructor forms.
+- **atexit segfault on failed open (Windows)**: `WindowsIOBackend` inserted `this` into `g_openFiles` in the constructor before `CreateFileW` / `CreateIoCompletionPort` could fail. If construction threw, the destructor never ran, leaving a dangling pointer in the global set. `atexit` cleanup (`close_all_files`) then crashed iterating over it. Insertion is now deferred until all fallible operations succeed.
+
 ## [1.1.2] - 2026-05-06
 
 ### Changed

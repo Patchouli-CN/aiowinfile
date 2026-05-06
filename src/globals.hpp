@@ -86,30 +86,16 @@ static inline PyObject *map_posix_error(int err) {
 }
 
 // 设置 Python 错误并抛出异常
+// Python 异常类会自动添加 [Errno %d] 前缀，因此 msg 中不要包含 [Errno %d]
+// 匹配内置 open() 风格: FileNotFoundError: [Errno 2] No such file or directory: 'path'
 [[noreturn]] inline void throw_os_error(int err, const char *msg, const char *filename = nullptr) {
     PyObject *cls = map_posix_error(err);
-    
-    char error_msg[1024];
-    const char *final_msg = msg;
-    
+    PyObject *exc;
     if (filename) {
-        snprintf(error_msg, sizeof(error_msg), 
-                 "[Errno %d] %s: '%s'", err, msg, filename);
-        final_msg = error_msg;
+        exc = PyObject_CallFunction(cls, "iss", err, msg, filename);
     } else {
-        // 尝试获取系统错误描述
-        const char *sys_msg = strerror(err);
-        if (sys_msg) {
-            snprintf(error_msg, sizeof(error_msg), 
-                     "[Errno %d] %s: %s", err, msg, sys_msg);
-        } else {
-            snprintf(error_msg, sizeof(error_msg), 
-                     "[Errno %d] %s", err, msg);
-        }
-        final_msg = error_msg;
+        exc = PyObject_CallFunction(cls, "is", err, msg);
     }
-    
-    PyObject *exc = PyObject_CallFunction(cls, "is", err, final_msg);
     PyErr_SetObject(cls, exc);
     Py_DECREF(exc);
     throw py::python_error();
@@ -123,27 +109,12 @@ static inline PyObject *map_posix_error(int err) {
 // 设置 Python 错误但不抛出（用于返回 future 的情况）
 inline void set_os_error(int err, const char *msg, const char *filename = nullptr) {
     PyObject *cls = map_posix_error(err);
-    
-    char error_msg[1024];
-    const char *final_msg = msg;
-    
+    PyObject *exc;
     if (filename) {
-        snprintf(error_msg, sizeof(error_msg), 
-                 "[Errno %d] %s: '%s'", err, msg, filename);
-        final_msg = error_msg;
+        exc = PyObject_CallFunction(cls, "iss", err, msg, filename);
     } else {
-        const char *sys_msg = strerror(err);
-        if (sys_msg) {
-            snprintf(error_msg, sizeof(error_msg), 
-                     "[Errno %d] %s: %s", err, msg, sys_msg);
-        } else {
-            snprintf(error_msg, sizeof(error_msg), 
-                     "[Errno %d] %s", err, msg);
-        }
-        final_msg = error_msg;
+        exc = PyObject_CallFunction(cls, "is", err, msg);
     }
-    
-    PyObject *exc = PyObject_CallFunction(cls, "is", err, final_msg);
     PyErr_SetObject(cls, exc);
     Py_DECREF(exc);
 }

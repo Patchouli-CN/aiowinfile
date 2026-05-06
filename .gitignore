@@ -36,3 +36,5 @@ __pycache__/
 # IDE
 .vscode/
 .idea/
+
+.pytest_cache

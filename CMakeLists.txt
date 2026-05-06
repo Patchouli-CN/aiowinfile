@@ -93,6 +93,7 @@ endif()
 set(SOURCES
     src/bindings.cpp
     src/globals.cpp
+    src/global_thread_pool.cpp
     src/loop_handle.cpp
     src/file_handle.cpp
     src/io_backend.cpp

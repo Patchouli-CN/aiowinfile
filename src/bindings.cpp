@@ -17,6 +17,8 @@
 #include "file_handle.hpp"
 #include "handle_pool.hpp"
 #include "config.hpp"
+#include "pool.hpp"
+#include "global_thread_pool.hpp"
 
 // nanobind bindings
 
@@ -93,7 +95,7 @@ struct PyAsyncFile {
 
 static void py_configure(py::dict options) {
     auto cfg = ayafileio::config().get();
-    
+
     if (options.contains("handle_pool_max_per_key")) {
         cfg.handle_pool_max_per_key = py::cast<size_t>(options["handle_pool_max_per_key"]);
     }
@@ -120,9 +122,13 @@ static void py_configure(py::dict options) {
     if (options.contains("io_uring_sqpoll")) {
         cfg.io_uring_sqpoll = py::cast<bool>(options["io_uring_sqpoll"]);
     }
-    
+
     ayafileio::config().update(cfg);
-    
+
+    // 同步 handle pool 原子变量，保证 handle_pool_release 读到最新值
+    set_handle_pool_limits(cfg.handle_pool_max_per_key, cfg.handle_pool_max_total);
+    // 同步 BufferPool 缓存配置
+    BufferPool::instance().refresh_config();
     // 同步旧的全局变量（向后兼容）
     g_worker_count.store(cfg.io_worker_count);
 }
@@ -143,6 +149,10 @@ static py::dict py_get_config() {
 
 static void py_reset_config() {
     ayafileio::config().update(ayafileio::Config::defaults());
+
+    auto defaults = ayafileio::Config::defaults();
+    set_handle_pool_limits(defaults.handle_pool_max_per_key, defaults.handle_pool_max_total);
+    BufferPool::instance().refresh_config();
     g_worker_count.store(0);
 }
 
@@ -280,6 +290,8 @@ NB_MODULE(_ayafileio, m) {
     // Linux 特有：清理所有 io_uring 实例
     uring_cleanup_all();
 #endif
+    // 关闭全局共享线程池（所有后端的 fallback 都依赖它）
+    GlobalThreadPool::instance().shutdown();
 #ifdef _WIN32
     // Windows 特有：关闭所有打开文件并停止 IOCP
     close_all_files();
@@ -309,6 +321,12 @@ NB_MODULE(_ayafileio, m) {
     m.def("set_handle_pool_limits", &set_handle_pool_limits,
         "Set handle pool max_per_key and max_total",
         py::arg("max_per_key"), py::arg("max_total"));
+
+    m.def("drain_handle_pool", &handle_pool_drain,
+        "Drain all cached handles from the pool (useful between benchmark rounds)");
+
+    m.def("drain_buffer_pool", &pool_clear,
+        "Drain all cached I/O buffers from the buffer pool");
 
     m.def("get_handle_pool_limits", []() {
         auto p = get_handle_pool_limits();

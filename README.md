@@ -6,7 +6,7 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python Version](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/platform-Cross--platform-blue.svg)](https://en.wikipedia.org/wiki/Cross-platform)
-[![Version](https://img.shields.io/badge/version-1.1.1.post1-red.svg)]()
+[![Version](https://img.shields.io/badge/version-1.1.2-red.svg)]()
 
 **当前是英文** | [**chinese version**](README_CN.md)
 
@@ -217,6 +217,15 @@ def get_config() -> dict: ...                   # Get current configuration
 def reset_config() -> None: ...                 # Reset to defaults
 def get_backend_info() -> dict: ...             # Get backend information
 ```
+
+### Pool Management
+
+```python
+def drain_handle_pool() -> None: ...            # Drain all cached file handles
+def drain_buffer_pool() -> None: ...            # Drain all cached I/O buffers
+```
+
+Use `drain_handle_pool()` / `drain_buffer_pool()` to release pooled resources at runtime — useful after bulk tempfile operations or between benchmark rounds.
 
 ## 🧪 Performance Comparison
 

@@ -55,7 +55,7 @@ class AsyncFile(Generic[T]):
         else:
             if encoding is not None:
                 raise ValueError("Binary mode does not accept an encoding argument.")
-            self._encoding = None
+            self._encoding = "utf-8"
 
         # ── 规范化传给 C++ 的模式（始终二进制）────────────────────────────
         valid_chars = set("rwaxbt+")
@@ -72,7 +72,7 @@ class AsyncFile(Generic[T]):
 
         self._mode = clean_mode
         self._impl = _AsyncFile(self._path, clean_mode)
-        self._line_buffer = b""
+        self._line_buffer = bytearray()
 
     # ── context manager ───────────────────────────────────────────────────────
 
@@ -118,7 +118,7 @@ class AsyncFile(Generic[T]):
                     self._line_buffer[idx + 1 :],
                 )
                 if self._is_text:
-                    text = line.decode(self._encoding, errors=self._errors)  # type: ignore reason: 同下
+                    text = line.decode(self._encoding, errors=self._errors)
                     # 处理 newline 参数
                     if self._newline is not None and self._newline != "\n":
                         text = (
@@ -127,14 +127,14 @@ class AsyncFile(Generic[T]):
                             else text.replace("\n", "")
                         )
                     return text
-                return line
+                return bytes(line)
 
             chunk: bytes = await self._impl.read(_DEFAULT_READLINE_BUF)
             if not chunk:
                 if self._line_buffer:
-                    out, self._line_buffer = self._line_buffer, b""
+                    out, self._line_buffer = self._line_buffer, bytearray()
                     if self._is_text:
-                        text = out.decode(self._encoding, errors=self._errors)  # type: ignore reason: self._encoding一定是str
+                        text = out.decode(self._encoding, errors=self._errors)
                         if self._newline is not None and self._newline != "\n":
                             text = (
                                 text.replace("\n", self._newline)
@@ -142,9 +142,9 @@ class AsyncFile(Generic[T]):
                                 else text.replace("\n", "")
                             )
                         return text
-                    return out
+                    return bytes(out)
                 return "" if self._is_text else b""
-            self._line_buffer += chunk
+            self._line_buffer.extend(chunk)
 
     async def readlines(self, hint: int = -1) -> list[str | bytes]:
         if self._closed:
@@ -164,8 +164,12 @@ class AsyncFile(Generic[T]):
 
     async def writelines(self, lines) -> None:
         """批量写入多行。"""
-        for line in lines:
-            await self.write(line)
+        if not lines:
+            return
+        if self._is_text:
+            await self.write("".join(lines))
+        else:
+            await self.write(b"".join(lines))
 
     async def readall(self) -> str | bytes:
         """读取整个文件。"""
@@ -295,7 +299,7 @@ class AsyncFile(Generic[T]):
         instance._path = "<fd>"
         instance._is_text = False
         instance._encoding = None
-        instance._line_buffer = b""
+        instance._line_buffer = bytearray()
         instance._closed = False
         instance._newline = None
         instance._errors = "strict"

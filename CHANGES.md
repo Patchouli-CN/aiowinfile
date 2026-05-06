@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.2] - 2026-05-06
+
+### Changed
+- **`ThreadIOBackend`: global shared thread pool** — Worker threads are now created once and shared across all `ThreadIOBackend` instances, eliminating per-file-open thread creation/destruction (~16 threads per cycle). On Linux/macOS fallback paths, repeated open-close cycles are now orders of magnitude faster.
+- **`WindowsIOBackend::close_impl()` optimized** — Removed unnecessary `SetFilePointerEx` (all I/O uses explicit `OVERLAPPED.Offset`). `CancelIoEx` is now skipped when there is no pending I/O (`m_pending == 0`), saving one syscall per close in the common case.
+- **`handle_pool_release` lock optimization** — `CloseHandle` syscall moved outside the writer lock to avoid blocking concurrent `handle_pool_acquire` operations. Replaced `operator[]` with `find()` to avoid creating empty map entries for handles that won't be pooled.
+- **`handle_pool_release` uses atomics** — Pool size limits are now read from lock-free atomics (`g_hpMaxPerKey` / `g_hpMaxTotal`) instead of `ConfigManager` (which requires a `shared_mutex` lock on every call).
+- **`BufferPool::release` uses atomic cache** — `buffer_pool_max` is cached in an atomic, refreshed only on `configure()`, avoiding `ConfigManager` reads on every buffer release.
+- **`WindowsIOBackend` skips `make_pool_key` for non-poolable modes** — `CREATE_ALWAYS` / `CREATE_NEW` modes (w/x) no longer compute handle pool keys, saving filesystem path normalization overhead.
+- **`AsyncFile.readline()` uses `bytearray` internally** — Replaced `bytes += bytes` concatenation with `bytearray.extend()`, eliminating O(n²) memory allocation for large files read line-by-line.
+- **`AsyncFile.writelines()` batched** — All lines are now joined and written in a single `write()` call instead of N individual async calls.
+
+### Added
+- **`drain_handle_pool()` / `drain_buffer_pool()` public API** — New functions to drain cached handles and I/O buffers at runtime (useful between benchmark rounds or after bulk tempfile operations).
+- **`GlobalThreadPool` singleton** — Cross-platform shared thread pool for `ThreadIOBackend`. Created at `src/global_thread_pool.hpp` / `.cpp` and compiled on all platforms for consistent cleanup.
+
+### Fixed
+- **`test_base.py`: async test exceptions silently swallowed** — `run_async()` previously caught all exceptions with `except Exception as e: ...` without reporting them or incrementing the failure counter. Now properly reports `AssertionError` and other exceptions.
+- **`_config.py`: `NameError` on `reset_config()`** — `_CACHE_MAX_SIZE` and `_CACHE_ENABLED` were referenced as `global` but never defined at module level. Now properly declared.
+- **`_compat.py`: removed `globals()` anti-pattern** — Replaced `globals()["_io_worker_count"] = count` with a proper module-level variable and `global` declaration.
+- **`util.py`: replaced bare `except:` with `except Exception:`** — Three bare `except` clauses could swallow `KeyboardInterrupt` and `SystemExit`.
+
+### Test & Benchmark
+- **`test_speed.py` Scene 5 (tempfile storm) Windows fix** — Scene 5 previously hung on Windows due to: (a) excessive concurrency (1000 → 200), (b) each file opened twice (write then read → now single `wb+`), (c) zombie handles accumulating in the pool across rounds (now drained before each round). Scene 5 now completes in ~3s on Windows.
+
 ## [1.1.1.post1] - 2026-05-02
 
 ### Removed

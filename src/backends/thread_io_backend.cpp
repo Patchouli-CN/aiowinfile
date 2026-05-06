@@ -148,33 +148,15 @@ ThreadIOBackend::~ThreadIOBackend() {
 // 初始化方法
 // ════════════════════════════════════════════════════════════════════════════
 
-void ThreadIOBackend::start_workers() {
-    UR_DEBUG_LOG("ThreadIOBackend: start_workers called, this=%p", (void*)this);
-    
-    bool expected = false;
-    if (!m_workers_started.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
-        UR_DEBUG_LOG0("ThreadIOBackend: workers already started, skipping");
-        return;
-    }
-    
-    UR_DEBUG_LOG("ThreadIOBackend: starting %u workers", m_num_workers);
-    m_workers.reserve(m_num_workers);
-    for (unsigned i = 0; i < m_num_workers; ++i) {
-        UR_DEBUG_LOG("ThreadIOBackend: creating worker %u", i);
-        m_workers.emplace_back(&ThreadIOBackend::worker_thread, this);
-    }
-    UR_DEBUG_LOG0("ThreadIOBackend: all workers created");
-}
-
 void ThreadIOBackend::ensure_loop_initialized() {
-    UR_DEBUG_LOG("ThreadIOBackend::ensure_loop_initialized start, this=%p, already_init=%d", 
+    UR_DEBUG_LOG("ThreadIOBackend::ensure_loop_initialized start, this=%p, already_init=%d",
                  (void*)this, m_loop_initialized.load());
-    
+
     if (m_loop_initialized.load(std::memory_order_acquire)) {
         UR_DEBUG_LOG0("ThreadIOBackend::ensure_loop_initialized already initialized, returning");
         return;
     }
-    
+
     UR_DEBUG_LOG0("ThreadIOBackend::ensure_loop_initialized calling get_running_loop...");
     PyObject* loop = PyObject_CallNoArgs(g_get_running_loop);
     if (!loop) {
@@ -183,17 +165,17 @@ void ThreadIOBackend::ensure_loop_initialized() {
         throw std::runtime_error("No running event loop");
     }
     UR_DEBUG_LOG("ThreadIOBackend::ensure_loop_initialized got loop=%p", (void*)loop);
-    
+
     {
         std::lock_guard<std::mutex> lk(m_loop_init_mtx);
         UR_DEBUG_LOG0("ThreadIOBackend::ensure_loop_initialized inside lock");
-        
+
         if (m_loop_initialized.load(std::memory_order_relaxed)) {
             UR_DEBUG_LOG0("ThreadIOBackend::ensure_loop_initialized another thread initialized");
             Py_DECREF(loop);
             return;
         }
-        
+
         UR_DEBUG_LOG0("ThreadIOBackend::ensure_loop_initialized refreshing cache...");
         refresh_loop_cache(loop);
         m_loop = loop;
@@ -201,59 +183,19 @@ void ThreadIOBackend::ensure_loop_initialized() {
         m_create_future = g_cachedFutureFn;
         Py_INCREF(m_create_future);
         m_loop_handle = g_cachedLoopHandle;
-        
+
         m_loop_initialized.store(true, std::memory_order_release);
         UR_DEBUG_LOG0("ThreadIOBackend::ensure_loop_initialized marked as initialized");
     }
-    
-    UR_DEBUG_LOG0("ThreadIOBackend::ensure_loop_initialized releasing GIL before starting workers...");
-    PyThreadState* _save = PyEval_SaveThread();
-    UR_DEBUG_LOG0("ThreadIOBackend::ensure_loop_initialized GIL released, starting workers...");
-    start_workers();
-    UR_DEBUG_LOG0("ThreadIOBackend::ensure_loop_initialized workers started, restoring GIL...");
-    PyEval_RestoreThread(_save);
-    UR_DEBUG_LOG("ThreadIOBackend::ensure_loop_initialized done, this=%p", (void*)this);
-}
 
-void ThreadIOBackend::worker_thread() {
-    UR_DEBUG_LOG0("ThreadIOBackend: worker_thread started");
-    
-    while (true) {
-        std::function<void()> task;
-        {
-            std::unique_lock<std::mutex> lk(m_queueMtx);
-            UR_DEBUG_LOG0("ThreadIOBackend: worker waiting for task...");
-            m_cv.wait(lk, [this] { 
-                return m_stop.load(std::memory_order_acquire) || !m_taskQueue.empty(); 
-            });
-            
-            if (m_stop.load(std::memory_order_acquire) && m_taskQueue.empty()) {
-                UR_DEBUG_LOG0("ThreadIOBackend: worker stopping");
-                return;
-            }
-            
-            task = std::move(m_taskQueue.front());
-            m_taskQueue.pop();
-            UR_DEBUG_LOG("ThreadIOBackend: worker got task, queue_size=%zu", m_taskQueue.size());
-        }
-        
-        if (task) {
-            UR_DEBUG_LOG0("ThreadIOBackend: worker executing task");
-            task();
-            UR_DEBUG_LOG0("ThreadIOBackend: worker task completed");
-        }
-    }
+    // 使用全局共享线程池，避免 per-file open/close 反复创建线程
+    GlobalThreadPool::instance().ensure_started(m_num_workers);
+    UR_DEBUG_LOG("ThreadIOBackend::ensure_loop_initialized done, this=%p", (void*)this);
 }
 
 void ThreadIOBackend::enqueue_task(std::function<void()> task) {
     UR_DEBUG_LOG("ThreadIOBackend: enqueue_task, this=%p", (void*)this);
-    {
-        std::lock_guard<std::mutex> lk(m_queueMtx);
-        m_taskQueue.push(std::move(task));
-        UR_DEBUG_LOG("ThreadIOBackend: task enqueued, queue_size=%zu", m_taskQueue.size());
-    }
-    m_cv.notify_one();
-    UR_DEBUG_LOG0("ThreadIOBackend: notified one worker");
+    GlobalThreadPool::instance().enqueue(std::move(task));
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -505,31 +447,17 @@ PyObject *ThreadIOBackend::close() {
 
 void ThreadIOBackend::close_impl() {
     UR_DEBUG_LOG("ThreadIOBackend::close_impl start, this=%p, fd=%d", (void*)this, m_fd);
-    
+
     bool expected = true;
     if (!m_running.compare_exchange_strong(expected, false, std::memory_order_acq_rel)) {
         UR_DEBUG_LOG0("ThreadIOBackend::close_impl already closed");
         return;
     }
-    
-    // 先设置 stop flag
-    UR_DEBUG_LOG0("ThreadIOBackend::close_impl stopping workers...");
-    m_stop.store(true, std::memory_order_release);
-    // 唤醒所有在 m_cv.wait() 上的 worker，让它们看到 m_stop == true 后退出
-    m_cv.notify_all();
-    
-    for (auto& t : m_workers) {
-        if (t.joinable()) {
-            t.join();
-        }
-    }
-    m_workers.clear();
-    UR_DEBUG_LOG0("ThreadIOBackend::close_impl workers stopped");
-    
-    // 等待 pending I/O
+
+    // 等待 pending I/O 完成（任务在全局共享线程池中执行，不需要停掉线程）
     int elapsed = 0;
     int wait_time = 1;
-    while (elapsed < static_cast<int>(m_cached_close_timeout_ms) && 
+    while (elapsed < static_cast<int>(m_cached_close_timeout_ms) &&
            m_pending.load(std::memory_order_acquire) > 0) {
         UR_DEBUG_LOG("ThreadIOBackend::close_impl waiting for pending I/O, elapsed=%d, pending=%ld",
                      elapsed, m_pending.load());
@@ -537,12 +465,12 @@ void ThreadIOBackend::close_impl() {
         elapsed += wait_time;
         wait_time = std::min(wait_time * 2, 32);
     }
-    
+
     if (m_pending.load() > 0) {
         UR_DEBUG_LOG("ThreadIOBackend::close_impl timeout waiting for pending I/O, forcing close. pending=%ld",
                      m_pending.load());
     }
-    
+
     if (m_owns_fd && m_fd != -1) {
         UR_DEBUG_LOG("ThreadIOBackend::close_impl closing fd=%d", m_fd);
         ::close(m_fd);

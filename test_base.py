@@ -452,8 +452,14 @@ class TestRunner:
 
             self.passed += 1
             print(f"  ✅ {name}")
+        except AssertionError as e:
+            self.failed += 1
+            self.failures.append((name, str(e)))
+            print(f"  ❌ {name}: {e}")
         except Exception as e:
-            ...
+            self.failed += 1
+            self.failures.append((name, f"{type(e).__name__}: {e}"))
+            print(f"  💥 {name}: {type(e).__name__}: {e}")
         finally:
             if self.enable_timeout_diag:
                 _timeout_diag.stop_test()

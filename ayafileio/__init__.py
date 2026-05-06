@@ -10,7 +10,7 @@ ayafileio - 跨平台异步文件 I/O 库
 提供与 aiofiles 兼容的 API, 但性能更优。
 """
 
-__version__ = "1.1.1.post1"
+__version__ = "1.1.2"
 
 from .util import warn_fake_async
 
@@ -29,6 +29,7 @@ from ._compat import (
     set_io_worker_count,
     set_iocp_worker_count,
 )
+from ._ayafileio import drain_handle_pool, drain_buffer_pool
 
 __all__ = [
     "open",
@@ -43,4 +44,6 @@ __all__ = [
     "get_handle_pool_limits",
     "set_io_worker_count",
     "set_iocp_worker_count",
+    "drain_handle_pool",
+    "drain_buffer_pool",
 ]

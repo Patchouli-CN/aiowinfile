@@ -6,7 +6,7 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python Version](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/platform-Cross--platform-blue.svg)](https://en.wikipedia.org/wiki/Cross-platform)
-[![Version](https://img.shields.io/badge/version-1.1.1.post1-red.svg)]()
+[![Version](https://img.shields.io/badge/version-1.1.2-red.svg)]()
 
 **当前是中文** | [**english version**](README.md)
 
@@ -215,6 +215,15 @@ def get_config() -> dict: ...                   # 获取当前配置
 def reset_config() -> None: ...                 # 重置为默认值
 def get_backend_info() -> dict: ...             # 获取后端信息
 ```
+
+### 池管理
+
+```python
+def drain_handle_pool() -> None: ...            # 清空句柄池中的所有缓存句柄
+def drain_buffer_pool() -> None: ...            # 清空缓冲区池中的所有缓存缓冲区
+```
+
+`drain_handle_pool()` / `drain_buffer_pool()` 可在运行时释放池化资源——适用于大量临时文件操作后或基准测试轮次间清理。
 
 ## 🧪 性能对比
 

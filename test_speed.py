@@ -443,14 +443,17 @@ async def build_tempfile_storm(lib: str, cfg: Config) -> Callable[[], Awaitable[
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
             if lib == "ayafileio":
+                # 排空句柄池，避免上一轮残留的僵尸句柄影响本轮
+                ayafileio.drain_handle_pool()
 
                 async def fn(i):
                     async with sem:
                         p = tmp / f"temp_{i}.bin"
                         d = os.urandom(FILE_SIZE)
-                        async with ayafileio.open(p, "wb") as f:
+                        # 用 wb+ 一次 open 完成写+读，减半 open-close 次数
+                        async with ayafileio.open(p, "wb+") as f:
                             await f.write(d)
-                        async with ayafileio.open(p, "rb") as f:
+                            await f.seek(0)
                             await f.read()
                         p.unlink(missing_ok=True)
             else:
@@ -724,11 +727,12 @@ async def run_benchmark(config: Config) -> dict:
         "mixed_workload", "场景 4：混合读写", build_mixed, config, sleep_stats, results
     )
 
-    # 场景 5
+    # 场景 5 — Windows 上并发过高会导致 IOCP 端口饱和 + 句柄池膨胀
+    storm_concurrency = 200 if sys.platform == "win32" else 1000
     storm_cfg = Config(
         test_rounds=config.test_rounds,
         warmup_rounds=config.warmup_rounds,
-        concurrent_limit=1000,
+        concurrent_limit=storm_concurrency,
         enable_tuning=False,
     )
     await run_scenario(

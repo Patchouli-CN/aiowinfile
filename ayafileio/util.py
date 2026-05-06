@@ -22,7 +22,7 @@ def _check_io_uring_available():
                 pass
             else:
                 return False
-    except:
+    except Exception:
         pass
 
     # 方法2：检查 liburing 库文件是否存在
@@ -35,7 +35,7 @@ def _check_io_uring_available():
             lib = ctypes.CDLL(liburing_path)
             if hasattr(lib, "io_uring_queue_init"):
                 return True
-        except:
+        except Exception:
             pass
 
     # 方法3：检查 /usr/include/liburing.h 是否存在
@@ -78,7 +78,7 @@ def _check_dispatch_io_available():
                 minor = int(parts[1])
                 # macOS 10.10 (Yosemite) 及以上支持 Dispatch I/O
                 return major >= 11 or (major == 10 and minor >= 10)
-    except:
+    except Exception:
         pass
 
     return False

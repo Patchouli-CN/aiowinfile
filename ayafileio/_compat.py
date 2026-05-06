@@ -11,8 +11,8 @@ try:
         from ._ayafileio import set_iocp_worker_count as _set_iocp_worker_count
 
         _has_native_set_iocp = True
-except Exception:
-    _has_native_set_iocp = False
+except ImportError:
+    pass
 
 # 尝试导入跨平台的 set_worker_count
 _has_native_set_worker = False
@@ -20,8 +20,12 @@ try:
     from ._ayafileio import set_worker_count as _set_worker_count
 
     _has_native_set_worker = True
-except Exception:
-    _has_native_set_worker = False
+except ImportError:
+    pass
+
+# ── 模块级状态 ──────────────────────────────────────────────────────────
+
+_io_worker_count = 0
 
 
 def set_handle_pool_limits(max_per_key: int, max_total: int) -> None:
@@ -44,7 +48,8 @@ def set_io_worker_count(count: int = 0) -> None:
     elif _has_native_set_iocp:
         _set_iocp_worker_count(count)
     else:
-        globals()["_io_worker_count"] = count
+        global _io_worker_count
+        _io_worker_count = count
 
 
 def set_iocp_worker_count(count: int = 0) -> None:

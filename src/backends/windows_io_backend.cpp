@@ -53,11 +53,13 @@ WindowsIOBackend::WindowsIOBackend(const std::string &path, const std::string &m
     if (canRead)  access |= GENERIC_READ;
     if (canWrite) access |= GENERIC_WRITE;
 
-    m_poolKey    = make_pool_key(path, access, disp);
     m_appendMode = appendMode;
 
     bool canReuse = (disp == OPEN_EXISTING || disp == OPEN_ALWAYS);
-    if (canReuse) m_handle = handle_pool_acquire(m_poolKey);
+    if (canReuse) {
+        m_poolKey = make_pool_key(path, access, disp);
+        m_handle = handle_pool_acquire(m_poolKey);
+    }
 
     std::wstring wpath = std::filesystem::u8path(path).wstring();
 
@@ -395,32 +397,38 @@ PyObject *WindowsIOBackend::close() {
 void WindowsIOBackend::close_impl() {
     bool expected = true;
     if (!m_running.compare_exchange_strong(expected, false)) return;
-    
+
     if (m_handle != INVALID_HANDLE_VALUE) {
-        CancelIoEx(m_handle, NULL);
-        
-        unsigned timeout_ms = ayafileio::config().close_timeout_ms();
-        int w = 1;
-        int elapsed = 0;
-        while (elapsed < (int)timeout_ms && m_pending.load(std::memory_order_acquire) > 0) {
-            Sleep(w);
-            elapsed += w;
-            w = std::min(w * 2, 32);
+        // 只在有 pending I/O 时才 CancelIoEx，避免不必要的 syscall
+        if (m_pending.load(std::memory_order_acquire) > 0) {
+            CancelIoEx(m_handle, NULL);
+
+            unsigned timeout_ms = ayafileio::config().close_timeout_ms();
+            int w = 1;
+            int elapsed = 0;
+            while (elapsed < (int)timeout_ms && m_pending.load(std::memory_order_acquire) > 0) {
+                Sleep(w);
+                elapsed += w;
+                w = std::min(w * 2, 32);
+            }
         }
-        
-        LARGE_INTEGER zero{};
-        SetFilePointerEx(m_handle, zero, nullptr, FILE_BEGIN);
-        
-        // ← 关键：只有自己打开的才放回池或关闭
+
+        // 注意：不需要 SetFilePointerEx — 所有 I/O 都使用
+        // OVERLAPPED.Offset 显式指定位置，文件指针无影响。
+
         if (m_owns_fd) {
-            handle_pool_release(m_poolKey, m_handle);  // 正常文件走池
+            // m_poolKey.path 为空表示 handle 不可池化（如 CREATE_ALWAYS）
+            if (!m_poolKey.path.empty()) {
+                handle_pool_release(m_poolKey, m_handle);
+            } else {
+                CloseHandle(m_handle);
+            }
         }
-        // 外部传入的 fd：不关，不缓存，只置空
         m_handle = INVALID_HANDLE_VALUE;
     }
-    { 
-        std::lock_guard<std::mutex> lk(g_openFilesMtx); 
-        g_openFiles.erase(this); 
+    {
+        std::lock_guard<std::mutex> lk(g_openFilesMtx);
+        g_openFiles.erase(this);
     }
 }
 

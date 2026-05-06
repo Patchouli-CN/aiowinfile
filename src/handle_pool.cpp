@@ -27,14 +27,27 @@ HANDLE handle_pool_acquire(const PoolKey &key) {
 
 void handle_pool_release(const PoolKey &key, HANDLE h) {
     if (h == INVALID_HANDLE_VALUE) return;
-    std::unique_lock<std::shared_mutex> lk(g_hpMtx);
-    auto &vec = g_hpMap[key];
-    size_t maxPerKey = ayafileio::config().handle_pool_max_per_key();
-    size_t maxTotal = ayafileio::config().handle_pool_max_total();
-    if (vec.size() < maxPerKey && g_hpTotal < maxTotal) {
-        vec.push_back(h);
-        ++g_hpTotal;
-    } else {
+
+    size_t maxPerKey = g_hpMaxPerKey.load(std::memory_order_relaxed);
+    size_t maxTotal = g_hpMaxTotal.load(std::memory_order_relaxed);
+
+    bool should_close = false;
+    {
+        std::unique_lock<std::shared_mutex> lk(g_hpMtx);
+        auto it = g_hpMap.find(key);
+        if (it != g_hpMap.end() && it->second.size() < maxPerKey && g_hpTotal < maxTotal) {
+            it->second.push_back(h);
+            ++g_hpTotal;
+        } else if (it == g_hpMap.end() && maxPerKey > 0 && g_hpTotal < maxTotal) {
+            // 首次见到此 key，创建新条目
+            g_hpMap[key].push_back(h);
+            ++g_hpTotal;
+        } else {
+            should_close = true;
+        }
+    }
+    // CloseHandle 是 syscall，移出锁外避免阻塞其他线程的 acquire
+    if (should_close) {
         CloseHandle(h);
     }
 }
@@ -48,6 +61,12 @@ void set_handle_pool_limits(size_t max_per_key, size_t max_total) {
     }
     g_hpMaxPerKey.store(max_per_key, std::memory_order_relaxed);
     g_hpMaxTotal.store(max_total, std::memory_order_relaxed);
+
+    // 同步到 ConfigManager，保持一致性
+    auto cfg = ayafileio::config().get();
+    cfg.handle_pool_max_per_key = max_per_key;
+    cfg.handle_pool_max_total = max_total;
+    ayafileio::config().update(cfg);
 }
 
 std::pair<size_t, size_t> get_handle_pool_limits() {
